@@ -1,0 +1,806 @@
+// core_engine.pka — Thin explicit pass-oriented runtime for Pollyn Engine.
+// Users own pass buffers/handles and call passes explicitly.
+
+use math;
+use proc;
+use clock;
+
+export def E2_MODE_TERMINAL: i32 = 0;
+export def E2_MODE_WINDOW: i32 = 1;
+export def E2_MODE_HEADLESS: i32 = 2;
+
+export def E2_TERM_BRAILLE: i32 = 0;
+export def E2_TERM_HALF_CELL: i32 = 1;
+export def E2_TERM_HALFBLOCK: i32 = E2_TERM_HALF_CELL;
+
+// Terminal present modes:
+// - DELTA: cursor-positioned updates for changed cells only
+// - LINES: full frame rows via newlines only (no cursor positioning)
+export def E2_TERM_PRESENT_DELTA: i32 = 0;
+export def E2_TERM_PRESENT_LINES: i32 = 1;
+
+export def E2_GEOM_MODE_FLAT: i32 = 0;
+export def E2_GEOM_MODE_PBR: i32 = 1;
+export def E2_GEOM_MODE_DEPTH: i32 = 2;
+export def E2_GEOM_MODE_CELL: i32 = 3;
+export def E2_GEOM_MODE_WIREFRAME: i32 = 4;
+
+// Color primitive mode for shared color buffer draws.
+def E2_PRIM_LINES: i32 = 1;
+def E2_PRIM_POINTS: i32 = 2;
+def E2_PRIM_TRIS: i32 = 3;
+
+// New shim helpers for GPU-handle based drawing.
+@symbol("shim_gl_begin_line")
+fn shim_gl_begin_line(mvp: *f32) void;
+
+@symbol("shim_gl_draw_mesh_handles")
+fn shim_gl_draw_mesh_handles(vbo: u32, ibo: u32, index_count: i32) void;
+
+@symbol("shim_gl_begin_wire")
+fn shim_gl_begin_wire(mvp: *f32, cr: f32, cg: f32, cb: f32, ca: f32) void;
+
+@symbol("shim_gl_draw_mesh_wire_handles")
+fn shim_gl_draw_mesh_wire_handles(vbo: u32, wire_ibo: u32,
+	wire_index_count: i32) void;
+
+@symbol("shim_gl_draw_color_handles")
+fn shim_gl_draw_color_handles(vbo: u32, vertex_count: i32,
+	primitive: i32, width: f32) void;
+
+@symbol("shim_gl_create_wire_ibo")
+fn shim_gl_create_wire_ibo(data: *u16, count: i32, out_wire_count: *i32) u32;
+
+export type E2GpuMesh = struct {
+	vbo: u32,
+	ibo: u32,
+	wire_ibo: u32,
+	index_count: i32,
+	wire_index_count: i32,
+	valid: bool,
+};
+
+export type E2GpuColorBuffer = struct {
+	vbo: u32,
+	vertex_count: i32,
+	valid: bool,
+};
+
+export type E2GeomDraw = struct {
+	mesh: *E2GpuMesh,
+	model: Mat4,
+	material: Material,
+};
+
+export type E2ColorDraw = struct {
+	buffer: *E2GpuColorBuffer,
+	width: f32,
+};
+
+export type E2GpuTexture = struct {
+	handle: u32,
+	width: i32,
+	height: i32,
+	valid: bool,
+};
+
+export type E2Runtime = struct {
+	mode: i32,
+	term_style: i32,
+	term_present_mode: i32,
+	input: InputState,
+	fb: Framebuffer,
+	prev_fb: Framebuffer,
+	prev_fb_valid: bool,
+	term_back: TermCellBuffer,
+	term_last_style: i32,
+	term_last_present_mode: i32,
+	text_queue: TextOverlay,
+	text_pass_pending: bool,
+	term_text_drawn: bool,
+	last_term_draw_ms: f64,
+	last_term_changed_cells: i32,
+	last_term_total_cells: i32,
+	running: bool,
+	target_fps: i32,
+	init_w: i32,
+	init_h: i32,
+};
+
+fn e2_default_light() Light = {
+	return light_directional(vec3_new(0.5, 0.3, 1.0), color_white());
+};
+
+fn e2_default_env() IrradianceEnv = {
+	return env_default();
+};
+
+fn e2_target_dims(rt: *E2Runtime, out_w: *i32, out_h: *i32) void = {
+	if (rt.mode == E2_MODE_WINDOW) {
+		let ww = shim_window_width();
+		let wh = shim_window_height();
+		*out_w = ww;
+		*out_h = wh;
+	} else {
+		*out_w = rt.fb.width;
+		*out_h = rt.fb.height;
+	};
+};
+
+fn e2_ortho_pixels(w: i32, h: i32) Mat4 = {
+	let m = mat4_identity();
+	let fw = w: f32;
+	let fh = h: f32;
+	m.d[0z] = 2.0 / fw;
+	m.d[5z] = -2.0 / fh;
+	m.d[10z] = 1.0;
+	m.d[12z] = -1.0;
+	m.d[13z] = 1.0;
+	m.d[14z] = 0.0;
+	m.d[15z] = 1.0;
+	return m;
+};
+
+fn e2_fb_bytes(fb: *Framebuffer) i32 = {
+	return fb.width * fb.height * 3;
+};
+
+fn e2_fb_equal(a: *Framebuffer, b: *Framebuffer) bool = {
+	if (a.width != b.width || a.height != b.height) { return false; };
+	let n = e2_fb_bytes(a);
+	for (let i: i32 = 0; i < n; i += 1) {
+		if (a.pixels[i: size] != b.pixels[i: size]) { return false; };
+	};
+	return true;
+};
+
+fn e2_fb_copy(dst: *Framebuffer, src: *Framebuffer) void = {
+	dst.width = src.width;
+	dst.height = src.height;
+	dst.has_depth = src.has_depth;
+	let n = e2_fb_bytes(src);
+	for (let i: i32 = 0; i < n; i += 1) {
+		dst.pixels[i: size] = src.pixels[i: size];
+	};
+};
+
+export fn e2_gpu_mesh_create(vertex_data: []f32, index_data: []u16) E2GpuMesh = {
+	if (vertex_data.len == 0z || index_data.len == 0z) {
+		return E2GpuMesh {
+			vbo = 0, ibo = 0, wire_ibo = 0,
+			index_count = 0, wire_index_count = 0, valid = false
+		};
+	};
+	let vbo = shim_gl_create_vbo(vertex_data.data, vertex_data.len: i32);
+	let ibo = shim_gl_create_ibo(index_data.data, index_data.len: i32);
+	let wire_index_count: i32 = 0;
+	let wire_ibo = shim_gl_create_wire_ibo(index_data.data, index_data.len: i32,
+		&wire_index_count);
+	return E2GpuMesh {
+		vbo = vbo,
+		ibo = ibo,
+		wire_ibo = wire_ibo,
+		index_count = index_data.len: i32,
+		wire_index_count = wire_index_count,
+		valid = (vbo != 0u32 && ibo != 0u32),
+	};
+};
+
+export fn e2_gpu_mesh_destroy(mesh: *E2GpuMesh) void = {
+	if (mesh.vbo != 0u32) { shim_gl_delete_buffer(mesh.vbo); };
+	if (mesh.ibo != 0u32) { shim_gl_delete_buffer(mesh.ibo); };
+	if (mesh.wire_ibo != 0u32) { shim_gl_delete_buffer(mesh.wire_ibo); };
+	mesh.vbo = 0u32;
+	mesh.ibo = 0u32;
+	mesh.wire_ibo = 0u32;
+	mesh.index_count = 0;
+	mesh.wire_index_count = 0;
+	mesh.valid = false;
+};
+
+export fn e2_gpu_color_create(vertex_data: []f32) E2GpuColorBuffer = {
+	if (vertex_data.len < 7z) {
+		return E2GpuColorBuffer { vbo = 0, vertex_count = 0, valid = false };
+	};
+	let floats = (vertex_data.len / 7z) * 7z;
+	if (floats < 7z) {
+		return E2GpuColorBuffer { vbo = 0, vertex_count = 0, valid = false };
+	};
+	let vbo = shim_gl_create_vbo(vertex_data.data, floats: i32);
+	return E2GpuColorBuffer {
+		vbo = vbo,
+		vertex_count = (floats / 7z): i32,
+		valid = (vbo != 0u32),
+	};
+};
+
+export fn e2_gpu_color_destroy(buf: *E2GpuColorBuffer) void = {
+	if (buf.vbo != 0u32) { shim_gl_delete_buffer(buf.vbo); };
+	buf.vbo = 0u32;
+	buf.vertex_count = 0;
+	buf.valid = false;
+};
+
+export fn e2_runtime_init(mode: i32, width: i32, height: i32) E2Runtime = {
+	let w = width;
+	let h = height;
+	let terminal = (mode == E2_MODE_TERMINAL);
+	let fb_w = w;
+	let fb_h = h;
+	if (terminal) {
+		let tw = shim_term_width();
+		let th = shim_term_height() - 1;
+		fb_w = tw * 2;
+		fb_h = th * 4;
+		if (fb_w > FB_MAX_W) { fb_w = FB_MAX_W; };
+		if (fb_h > FB_MAX_H) { fb_h = FB_MAX_H; };
+	};
+	if (fb_w < 1) { fb_w = 1; };
+	if (fb_h < 1) { fb_h = 1; };
+	return E2Runtime {
+		mode = mode,
+		term_style = E2_TERM_BRAILLE,
+		term_present_mode = E2_TERM_PRESENT_DELTA,
+		input = input_init(terminal),
+		fb = fb_init(fb_w, fb_h),
+		prev_fb = fb_init(fb_w, fb_h),
+		prev_fb_valid = false,
+		term_back = term_cell_buffer_init(),
+		term_last_style = -1,
+		term_last_present_mode = -1,
+		text_queue = text_overlay_init(),
+		text_pass_pending = false,
+		term_text_drawn = false,
+		last_term_draw_ms = 0.0f64,
+		last_term_changed_cells = 0,
+		last_term_total_cells = 0,
+		running = true,
+		target_fps = 30,
+		init_w = w,
+		init_h = h,
+	};
+};
+
+export fn e2_runtime_start(rt: *E2Runtime) bool = {
+	if (rt.mode == E2_MODE_TERMINAL) {
+		shim_term_raw_enter();
+		if (shim_gl_init_offscreen() < 0) { return false; };
+		if (!renderer_init_shaders()) { return false; };
+		shim_gl_fbo_create(rt.fb.width, rt.fb.height);
+		return true;
+	};
+	if (rt.mode == E2_MODE_WINDOW) {
+		let title: [15]u8 = ['P', 'o', 'l', 'l', 'y', 'n', ' ', 'E', 'n', 'g', 'i', 'n', 'e', '2', 0];
+		if (shim_window_create(rt.init_w, rt.init_h, &title[0z]) < 0) { return false; };
+		if (!renderer_init_shaders()) { return false; };
+		shim_gl_enable_depth();
+		return true;
+	};
+	if (shim_gl_init_offscreen() < 0) { return false; };
+	if (!renderer_init_shaders()) { return false; };
+	shim_gl_fbo_create(rt.fb.width, rt.fb.height);
+	return true;
+};
+
+export fn e2_runtime_shutdown(rt: *E2Runtime) void = {
+	if (rt.mode == E2_MODE_TERMINAL) {
+		shim_gl_fbo_destroy();
+		shim_window_destroy();
+		shim_term_raw_exit();
+		return;
+	};
+	if (rt.mode == E2_MODE_WINDOW) {
+		shim_window_destroy();
+		return;
+	};
+	shim_gl_fbo_destroy();
+	shim_window_destroy();
+};
+
+export fn e2_runtime_should_run(rt: *E2Runtime) bool = {
+	if (!rt.running) { return false; };
+	if (rt.input.should_close) { return false; };
+	if (rt.mode == E2_MODE_WINDOW && shim_window_should_close() != 0) {
+		return false;
+	};
+	return true;
+};
+
+export fn e2_runtime_begin_frame(rt: *E2Runtime) void = {
+	if (rt.mode == E2_MODE_WINDOW) {
+		shim_window_poll();
+	};
+	input_poll(&rt.input);
+	text_overlay_clear(&rt.text_queue);
+	rt.text_pass_pending = false;
+};
+
+export fn e2_pass_begin(rt: *E2Runtime, clear: Color) void = {
+	let w: i32 = 0;
+	let h: i32 = 0;
+	e2_target_dims(rt, &w, &h);
+	if (rt.mode == E2_MODE_TERMINAL || rt.mode == E2_MODE_HEADLESS) {
+		shim_gl_fbo_bind();
+	};
+	shim_gl_viewport(0, 0, w, h);
+	shim_gl_clear(clear.r, clear.g, clear.b, clear.a);
+	shim_gl_enable_depth();
+	shim_gl_enable_blend();
+};
+
+export fn e2_pass_end(rt: *E2Runtime) void = {
+	if (rt.mode == E2_MODE_TERMINAL || rt.mode == E2_MODE_HEADLESS) {
+		shim_gl_disable_blend();
+		shim_gl_fbo_read_pixels_flipped(&rt.fb.pixels[0z], rt.fb.width, rt.fb.height);
+		shim_gl_fbo_unbind();
+	};
+};
+
+fn e2_pick_light(lights: []Light) Light = {
+	let l = e2_default_light();
+	if (lights.len > 0z) {
+		return lights[0z];
+	};
+	return l;
+};
+
+fn e2_pick_light2(lights: []Light) Light = {
+	if (lights.len > 1z) {
+		return lights[1z];
+	};
+	return Light {
+		position = vec3_zero(),
+		direction = vec3_zero(),
+		color = color_black(),
+		directional = true
+	};
+};
+
+fn e2_pick_env(env: *IrradianceEnv) IrradianceEnv = {
+	if (env == (0: uintptr: *IrradianceEnv)) {
+		return e2_default_env();
+	};
+	return *env;
+};
+
+export fn e2_pass_3d_geom(rt: *E2Runtime,
+	cam: *FreeCamera,
+	camera_mode: i32,
+	draws: []E2GeomDraw,
+	lights: []Light,
+	env: *IrradianceEnv) void = {
+	if (draws.len == 0z) { return; };
+	let w: i32 = 0;
+	let h: i32 = 0;
+	e2_target_dims(rt, &w, &h);
+	if (w <= 0 || h <= 0) { return; };
+
+	let aspect = (w: f32) / (h: f32);
+	let vp = freecam_view_projection(cam, aspect);
+	let light = e2_pick_light(lights);
+	let light2 = e2_pick_light2(lights);
+	let envv = e2_pick_env(env);
+
+	let env_data: [16]f32 = [0.0...];
+	env_data[0z] = envv.sky_color.r;
+	env_data[1z] = envv.sky_color.g;
+	env_data[2z] = envv.sky_color.b;
+	env_data[3z] = envv.ground_color.r;
+	env_data[4z] = envv.ground_color.g;
+	env_data[5z] = envv.ground_color.b;
+	env_data[6z] = envv.horizon_color.r;
+	env_data[7z] = envv.horizon_color.g;
+	env_data[8z] = envv.horizon_color.b;
+	env_data[9z] = envv.specular_color.r;
+	env_data[10z] = envv.specular_color.g;
+	env_data[11z] = envv.specular_color.b;
+	env_data[12z] = envv.intensity;
+	env_data[13z] = light2.direction.x;
+	env_data[14z] = light2.direction.y;
+	env_data[15z] = light2.direction.z;
+
+	for (let i: size = 0z; i < draws.len; i += 1z) {
+		let d = draws[i];
+		if (d.mesh == (0: uintptr: *E2GpuMesh)) { continue; };
+		if (!d.mesh.valid || d.mesh.index_count <= 0) { continue; };
+		let mvp = mat4_mul(&vp, &d.model);
+
+		if (camera_mode == E2_GEOM_MODE_DEPTH) {
+			shim_gl_begin_depth(&mvp.d[0z], cam.znear, cam.zfar);
+			shim_gl_draw_mesh_handles(d.mesh.vbo, d.mesh.ibo, d.mesh.index_count);
+			continue;
+		};
+
+		if (camera_mode == E2_GEOM_MODE_WIREFRAME) {
+			if (d.mesh.wire_ibo == 0u32 || d.mesh.wire_index_count <= 0) { continue; };
+			shim_gl_begin_wire(&mvp.d[0z],
+				d.material.albedo.r, d.material.albedo.g,
+				d.material.albedo.b, d.material.albedo.a);
+			shim_gl_draw_mesh_wire_handles(d.mesh.vbo, d.mesh.wire_ibo,
+				d.mesh.wire_index_count);
+			continue;
+		};
+
+		if (camera_mode == E2_GEOM_MODE_PBR) {
+			let eye = cam.eye;
+			shim_gl_begin_pbr(&mvp.d[0z], &d.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				eye.x, eye.y, eye.z,
+				d.material.albedo.r, d.material.albedo.g, d.material.albedo.b,
+				d.material.metallic, d.material.roughness,
+				&env_data[0z], d.material.albedo.a);
+		} else if (camera_mode == E2_GEOM_MODE_CELL) {
+			shim_gl_begin_cell(&mvp.d[0z], &d.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				d.material.albedo.r, d.material.albedo.g,
+				d.material.albedo.b, d.material.albedo.a);
+		} else {
+			shim_gl_begin_flat(&mvp.d[0z], &d.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				d.material.albedo.r, d.material.albedo.g,
+				d.material.albedo.b, d.material.albedo.a);
+		};
+		shim_gl_set_albedo_texture(d.material.texture);
+		shim_gl_draw_mesh_handles(d.mesh.vbo, d.mesh.ibo, d.mesh.index_count);
+	};
+};
+
+fn e2_draw_color_pass(mvp: *Mat4, draws: []E2ColorDraw, prim: i32) void = {
+	if (draws.len == 0z) { return; };
+	shim_gl_begin_line(&mvp.d[0z]);
+	for (let i: size = 0z; i < draws.len; i += 1z) {
+		let d = draws[i];
+		if (d.buffer == (0: uintptr: *E2GpuColorBuffer)) { continue; };
+		if (!d.buffer.valid || d.buffer.vertex_count <= 0) { continue; };
+		let w = d.width;
+		if (w < 1.0) { w = 1.0; };
+		shim_gl_draw_color_handles(d.buffer.vbo, d.buffer.vertex_count, prim, w);
+	};
+};
+
+export fn e2_pass_3d_lines(rt: *E2Runtime, cam: *FreeCamera, draws: []E2ColorDraw) void = {
+	let w: i32 = 0;
+	let h: i32 = 0;
+	e2_target_dims(rt, &w, &h);
+	if (w <= 0 || h <= 0) { return; };
+	let vp = freecam_view_projection(cam, (w: f32) / (h: f32));
+	e2_draw_color_pass(&vp, draws, E2_PRIM_LINES);
+};
+
+export fn e2_pass_3d_points(rt: *E2Runtime, cam: *FreeCamera, draws: []E2ColorDraw) void = {
+	let w: i32 = 0;
+	let h: i32 = 0;
+	e2_target_dims(rt, &w, &h);
+	if (w <= 0 || h <= 0) { return; };
+	let vp = freecam_view_projection(cam, (w: f32) / (h: f32));
+	e2_draw_color_pass(&vp, draws, E2_PRIM_POINTS);
+};
+
+export fn e2_pass_2d_geom(rt: *E2Runtime, draws: []E2ColorDraw) void = {
+	let w: i32 = 0;
+	let h: i32 = 0;
+	e2_target_dims(rt, &w, &h);
+	if (w <= 0 || h <= 0) { return; };
+	shim_gl_disable_depth();
+	let ortho = e2_ortho_pixels(w, h);
+	e2_draw_color_pass(&ortho, draws, E2_PRIM_TRIS);
+	shim_gl_enable_depth();
+};
+
+export fn e2_pass_2d_lines(rt: *E2Runtime, draws: []E2ColorDraw) void = {
+	let w: i32 = 0;
+	let h: i32 = 0;
+	e2_target_dims(rt, &w, &h);
+	if (w <= 0 || h <= 0) { return; };
+	shim_gl_disable_depth();
+	let ortho = e2_ortho_pixels(w, h);
+	e2_draw_color_pass(&ortho, draws, E2_PRIM_LINES);
+	shim_gl_enable_depth();
+};
+
+export fn e2_pass_2d_points(rt: *E2Runtime, draws: []E2ColorDraw) void = {
+	let w: i32 = 0;
+	let h: i32 = 0;
+	e2_target_dims(rt, &w, &h);
+	if (w <= 0 || h <= 0) { return; };
+	shim_gl_disable_depth();
+	let ortho = e2_ortho_pixels(w, h);
+	e2_draw_color_pass(&ortho, draws, E2_PRIM_POINTS);
+	shim_gl_enable_depth();
+};
+
+// ================================================================
+// GPU texture management + 2D texture blit pass
+// ================================================================
+
+export fn e2_gpu_texture_create_rgb(data: []u8, w: i32, h: i32) E2GpuTexture = {
+	let handle = shim_gl_create_texture_rgb(data.data, w, h);
+	return E2GpuTexture {
+		handle = handle,
+		width = w,
+		height = h,
+		valid = handle > 0u32,
+	};
+};
+
+export fn e2_gpu_texture_update_rgb(tex: *E2GpuTexture, data: []u8) void = {
+	if (!tex.valid) { return; };
+	shim_gl_update_texture_rgb(tex.handle, data.data, tex.width, tex.height);
+};
+
+export fn e2_gpu_texture_destroy(tex: *E2GpuTexture) void = {
+	if (tex.valid) {
+		shim_gl_delete_texture(tex.handle);
+		tex.handle = 0u32;
+		tex.valid = false;
+	};
+};
+
+// Initialize the blit shader (call once after shaders are loaded).
+export fn e2_init_blit_shader() bool = {
+	let blit_vs: [4096]u8 = [0...];
+	let blit_fs: [4096]u8 = [0...];
+	if (!shader_read_into("pollyn_engine/shaders/blit.vert", blit_vs[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/blit.frag", blit_fs[0z..])) { return false; };
+	return shim_gl_init_blit_shader(&blit_vs[0z], &blit_fs[0z]) == 0;
+};
+
+// Draw a GPU texture as a 2D overlay at pixel position (x, y) with size (w, h).
+export fn e2_pass_2d_texture(rt: *E2Runtime, tex: *E2GpuTexture,
+	x: i32, y: i32, w: i32, h: i32) void = {
+	if (!tex.valid) { return; };
+	let sw: i32 = 0;
+	let sh: i32 = 0;
+	e2_target_dims(rt, &sw, &sh);
+	if (sw <= 0 || sh <= 0) { return; };
+	shim_gl_draw_textured_quad(tex.handle,
+		x: f32, y: f32, w: f32, h: f32, sw, sh);
+};
+
+export fn e2_text_add(rt: *E2Runtime, x_frac: f32, y_frac: f32,
+	s: str, r: u8, g: u8, b: u8) void = {
+	text_overlay_add(&rt.text_queue, x_frac, y_frac, s, r, g, b);
+};
+
+fn e2_text_flush_terminal_to_backing(rt: *E2Runtime) void = {
+	let glyph_w = text_target_glyph_w_i32(rt.fb.height);
+	let glyph_h = text_target_glyph_h_i32(rt.fb.height);
+	for (let i: i32 = 0; i < rt.text_queue.count; i += 1) {
+		let item = &rt.text_queue.items[i: size];
+		if (item.text_len <= 0) { continue; };
+
+		let sx = (item.x_frac * (rt.fb.width: f32)): i32;
+		let sy = (item.y_frac * (rt.fb.height: f32)): i32;
+		let origin_x = sx;
+		let cx = sx;
+		let cy = sy;
+
+		for (let j: i32 = 0; j < item.text_len; j += 1) {
+			let ch = item.text[j: size];
+			if (ch == 10u8) {
+				cx = origin_x;
+				cy = cy + glyph_h;
+				continue;
+			};
+			if (cx + glyph_w > rt.fb.width) {
+				cx = origin_x;
+				cy = cy + glyph_h;
+			};
+			if (cy + glyph_h > rt.fb.height) { break; };
+			text_draw_char_scaled(&rt.fb, ch: i32, cx, cy, glyph_w, glyph_h,
+				item.r, item.g, item.b);
+			cx = cx + glyph_w;
+		};
+	};
+};
+
+export fn e2_pass_text(rt: *E2Runtime) void = {
+	if (rt.mode == E2_MODE_WINDOW) {
+		let w = shim_window_width();
+		let h = shim_window_height();
+		text_overlay_render_window(&rt.text_queue, w, h);
+	} else if (rt.mode == E2_MODE_TERMINAL) {
+		if (rt.term_present_mode == E2_TERM_PRESENT_LINES) {
+			// Line-stream mode avoids cursor escapes by rasterizing text into fb.
+			e2_text_flush_terminal_to_backing(rt);
+			rt.text_pass_pending = false;
+		} else {
+			// Delta mode emits terminal text via cursor-positioned overlay.
+			rt.text_pass_pending = true;
+		};
+	} else {
+		e2_text_flush_terminal_to_backing(rt);
+	};
+};
+
+export fn e2_runtime_present(rt: *E2Runtime) void = {
+	if (rt.mode == E2_MODE_WINDOW) {
+		shim_window_swap();
+		return;
+	};
+	if (rt.mode == E2_MODE_HEADLESS) {
+		return;
+	};
+
+	let tw = shim_term_width();
+	let th = shim_term_height() - 1;
+	let style_or_mode_changed = (rt.term_last_style != rt.term_style) ||
+		(rt.term_last_present_mode != rt.term_present_mode);
+	let draw_t0_tick = clock::Now();
+	let changed_cells: i32 = 0;
+
+	if (rt.term_present_mode == E2_TERM_PRESENT_LINES) {
+		let need_full_lines = style_or_mode_changed ||
+			(!rt.prev_fb_valid) ||
+			(!e2_fb_equal(&rt.fb, &rt.prev_fb));
+		if (need_full_lines) {
+			if (rt.term_style == E2_TERM_BRAILLE) {
+				term_render_braille_lines(&rt.fb, tw, th);
+			} else {
+				term_render_halfblock_lines(&rt.fb, tw, th);
+			};
+			e2_fb_copy(&rt.prev_fb, &rt.fb);
+			rt.prev_fb_valid = true;
+			changed_cells = tw * th;
+		} else {
+			changed_cells = 0;
+		};
+	} else {
+		let force_full = style_or_mode_changed || (rt.term_text_drawn && !rt.text_pass_pending);
+		if (rt.term_style == E2_TERM_BRAILLE) {
+			changed_cells = term_render_braille_delta(&rt.fb, tw, th,
+				&rt.term_back, force_full);
+		} else {
+			changed_cells = term_render_halfblock_delta(&rt.fb, tw, th,
+				&rt.term_back, force_full);
+		};
+		rt.prev_fb_valid = false;
+	};
+
+	if (rt.term_present_mode == E2_TERM_PRESENT_DELTA && rt.text_pass_pending) {
+		text_overlay_render_terminal(&rt.text_queue, tw, th);
+		rt.term_text_drawn = (rt.text_queue.count > 0);
+	} else {
+		rt.term_text_drawn = false;
+	};
+	rt.text_pass_pending = false;
+
+	rt.last_term_draw_ms = clock::Since(draw_t0_tick) * 1000.0f64;
+	rt.last_term_changed_cells = changed_cells;
+	rt.last_term_total_cells = rt.term_back.cols * rt.term_back.rows;
+	if (rt.term_present_mode == E2_TERM_PRESENT_LINES) {
+		rt.last_term_total_cells = tw * th;
+	};
+	rt.term_last_style = rt.term_style;
+	rt.term_last_present_mode = rt.term_present_mode;
+
+	let target_ns: i64 = 1000000000i64 / (rt.target_fps: i64);
+	let frame_ms: i32 = (target_ns / 1000000i64): i32;
+	if (frame_ms > 0) { proc::MilliSleep(frame_ms); };
+};
+
+// Explicit offscreen render/export path for any camera, including main camera.
+export fn e2_render_camera_to_buffers(
+	cam: *FreeCamera,
+	camera_mode: i32,
+	geom_draws: []E2GeomDraw,
+	line_draws: []E2ColorDraw,
+	point_draws: []E2ColorDraw,
+	lights: []Light,
+	env: *IrradianceEnv,
+	out_rgb: []u8,
+	out_depth: []f32,
+	w: i32,
+	h: i32) bool = {
+	if (w <= 0 || h <= 0) { return false; };
+	let rgb_need: size = (w * h * 3): size;
+	if (out_rgb.len < rgb_need) { return false; };
+
+	shim_gl_fbo_create(w, h);
+	shim_gl_fbo_bind();
+	shim_gl_viewport(0, 0, w, h);
+	shim_gl_clear(0.0, 0.0, 0.0, 1.0);
+	shim_gl_enable_depth();
+	shim_gl_enable_blend();
+
+	let aspect = (w: f32) / (h: f32);
+	let vp = freecam_view_projection(cam, aspect);
+	let light = e2_pick_light(lights);
+	let light2 = e2_pick_light2(lights);
+	let envv = e2_pick_env(env);
+	let env_data: [16]f32 = [0.0...];
+	env_data[0z] = envv.sky_color.r;
+	env_data[1z] = envv.sky_color.g;
+	env_data[2z] = envv.sky_color.b;
+	env_data[3z] = envv.ground_color.r;
+	env_data[4z] = envv.ground_color.g;
+	env_data[5z] = envv.ground_color.b;
+	env_data[6z] = envv.horizon_color.r;
+	env_data[7z] = envv.horizon_color.g;
+	env_data[8z] = envv.horizon_color.b;
+	env_data[9z] = envv.specular_color.r;
+	env_data[10z] = envv.specular_color.g;
+	env_data[11z] = envv.specular_color.b;
+	env_data[12z] = envv.intensity;
+	env_data[13z] = light2.direction.x;
+	env_data[14z] = light2.direction.y;
+	env_data[15z] = light2.direction.z;
+
+	for (let i: size = 0z; i < geom_draws.len; i += 1z) {
+		let gdraw = geom_draws[i];
+		if (gdraw.mesh == (0: uintptr: *E2GpuMesh)) { continue; };
+		if (!gdraw.mesh.valid || gdraw.mesh.index_count <= 0) { continue; };
+		let mvp = mat4_mul(&vp, &gdraw.model);
+		if (camera_mode == E2_GEOM_MODE_DEPTH) {
+			shim_gl_begin_depth(&mvp.d[0z], cam.znear, cam.zfar);
+		} else if (camera_mode == E2_GEOM_MODE_PBR) {
+			shim_gl_begin_pbr(&mvp.d[0z], &gdraw.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				cam.eye.x, cam.eye.y, cam.eye.z,
+				gdraw.material.albedo.r, gdraw.material.albedo.g, gdraw.material.albedo.b,
+				gdraw.material.metallic, gdraw.material.roughness,
+				&env_data[0z], gdraw.material.albedo.a);
+		} else if (camera_mode == E2_GEOM_MODE_CELL) {
+			shim_gl_begin_cell(&mvp.d[0z], &gdraw.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				gdraw.material.albedo.r, gdraw.material.albedo.g,
+				gdraw.material.albedo.b, gdraw.material.albedo.a);
+		} else {
+			shim_gl_begin_flat(&mvp.d[0z], &gdraw.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				gdraw.material.albedo.r, gdraw.material.albedo.g,
+				gdraw.material.albedo.b, gdraw.material.albedo.a);
+		};
+		if (camera_mode != E2_GEOM_MODE_DEPTH) {
+			shim_gl_set_albedo_texture(gdraw.material.texture);
+		};
+		shim_gl_draw_mesh_handles(gdraw.mesh.vbo, gdraw.mesh.ibo, gdraw.mesh.index_count);
+	};
+
+	if (line_draws.len > 0z) {
+		shim_gl_begin_line(&vp.d[0z]);
+		for (let li: size = 0z; li < line_draws.len; li += 1z) {
+			let ldraw = line_draws[li];
+			if (ldraw.buffer == (0: uintptr: *E2GpuColorBuffer)) { continue; };
+			if (!ldraw.buffer.valid) { continue; };
+			shim_gl_draw_color_handles(ldraw.buffer.vbo, ldraw.buffer.vertex_count,
+				E2_PRIM_LINES, ldraw.width);
+		};
+	};
+	if (point_draws.len > 0z) {
+		shim_gl_begin_line(&vp.d[0z]);
+		for (let pi: size = 0z; pi < point_draws.len; pi += 1z) {
+			let pdraw = point_draws[pi];
+			if (pdraw.buffer == (0: uintptr: *E2GpuColorBuffer)) { continue; };
+			if (!pdraw.buffer.valid) { continue; };
+			shim_gl_draw_color_handles(pdraw.buffer.vbo, pdraw.buffer.vertex_count,
+				E2_PRIM_POINTS, pdraw.width);
+		};
+	};
+
+	shim_gl_fbo_read_pixels_flipped(out_rgb.data, w, h);
+
+	if (out_depth.len >= (w * h): size) {
+		shim_gl_clear(0.0, 0.0, 0.0, 1.0);
+		shim_gl_enable_depth();
+		for (let di: size = 0z; di < geom_draws.len; di += 1z) {
+			let depth_draw = geom_draws[di];
+			if (depth_draw.mesh == (0: uintptr: *E2GpuMesh)) { continue; };
+			if (!depth_draw.mesh.valid || depth_draw.mesh.index_count <= 0) { continue; };
+			let depth_mvp = mat4_mul(&vp, &depth_draw.model);
+			shim_gl_begin_depth(&depth_mvp.d[0z], cam.znear, cam.zfar);
+			shim_gl_draw_mesh_handles(depth_draw.mesh.vbo, depth_draw.mesh.ibo, depth_draw.mesh.index_count);
+		};
+		shim_gl_fbo_read_depth_encoded(out_depth.data, w, h, cam.znear, cam.zfar);
+	};
+
+	shim_gl_fbo_unbind();
+	shim_gl_fbo_destroy();
+	return true;
+};

@@ -1,0 +1,128 @@
+// util_buffers.pka — Userspace buffer helpers for engine explicit pass orchestration.
+
+export def E2_MAX_GEOM_DRAWS: size = 512z;
+export def E2_MAX_COLOR_DRAWS: size = 512z;
+
+def E2_MAX_COLOR_VERTS: size = 16384z;
+def E2_MAX_COLOR_FLOATS: size = 114688z; // verts * 7
+
+export type E2GeomPassBuffer = struct {
+	draws: [E2_MAX_GEOM_DRAWS]E2GeomDraw,
+	count: i32,
+};
+
+export type E2ColorPassBuffer = struct {
+	draws: [E2_MAX_COLOR_DRAWS]E2ColorDraw,
+	count: i32,
+};
+
+export type E2CpuColorVertexBuffer = struct {
+	data: [E2_MAX_COLOR_FLOATS]f32,
+	vertex_count: i32,
+};
+
+fn util_default_geom_draw() E2GeomDraw = {
+	return E2GeomDraw {
+		mesh = 0: uintptr: *E2GpuMesh,
+		model = mat4_identity(),
+		material = material_flat(color_white()),
+	};
+};
+
+fn util_default_color_draw() E2ColorDraw = {
+	return E2ColorDraw {
+		buffer = 0: uintptr: *E2GpuColorBuffer,
+		width = 1.0,
+	};
+};
+
+export fn util_geom_pass_init() E2GeomPassBuffer = {
+	return E2GeomPassBuffer {
+		draws = [util_default_geom_draw()...],
+		count = 0,
+	};
+};
+
+export fn util_geom_pass_clear(buf: *E2GeomPassBuffer) void = {
+	buf.count = 0;
+};
+
+export fn util_geom_pass_add(buf: *E2GeomPassBuffer,
+	mesh: *E2GpuMesh, model: Mat4, material: Material) void = {
+	if (buf.count >= (E2_MAX_GEOM_DRAWS: i32)) { return; };
+	let idx: size = buf.count: size;
+	buf.draws[idx] = E2GeomDraw {
+		mesh = mesh,
+		model = model,
+		material = material,
+	};
+	buf.count = buf.count + 1;
+};
+
+export fn util_color_pass_init() E2ColorPassBuffer = {
+	return E2ColorPassBuffer {
+		draws = [util_default_color_draw()...],
+		count = 0,
+	};
+};
+
+export fn util_color_pass_clear(buf: *E2ColorPassBuffer) void = {
+	buf.count = 0;
+};
+
+export fn util_color_pass_add(buf: *E2ColorPassBuffer,
+	gpu: *E2GpuColorBuffer, width: f32) void = {
+	if (buf.count >= (E2_MAX_COLOR_DRAWS: i32)) { return; };
+	let idx: size = buf.count: size;
+	buf.draws[idx] = E2ColorDraw { buffer = gpu, width = width };
+	buf.count = buf.count + 1;
+};
+
+export fn util_cpu_color_buffer_init() E2CpuColorVertexBuffer = {
+	return E2CpuColorVertexBuffer {
+		data = [0.0...],
+		vertex_count = 0,
+	};
+};
+
+export fn util_cpu_color_buffer_clear(buf: *E2CpuColorVertexBuffer) void = {
+	buf.vertex_count = 0;
+};
+
+export fn util_cpu_color_buffer_add_vertex(buf: *E2CpuColorVertexBuffer,
+	x: f32, y: f32, z: f32, c: Color) void = {
+	if (buf.vertex_count >= (E2_MAX_COLOR_VERTS: i32)) { return; };
+	let base: size = (buf.vertex_count * 7): size;
+	if (base + 6z >= E2_MAX_COLOR_FLOATS) { return; };
+	buf.data[base] = x;
+	buf.data[base + 1z] = y;
+	buf.data[base + 2z] = z;
+	buf.data[base + 3z] = c.r;
+	buf.data[base + 4z] = c.g;
+	buf.data[base + 5z] = c.b;
+	buf.data[base + 6z] = c.a;
+	buf.vertex_count = buf.vertex_count + 1;
+};
+
+export fn util_cpu_color_buffer_add_line(buf: *E2CpuColorVertexBuffer,
+	p0: Vec3, p1: Vec3, c: Color) void = {
+	util_cpu_color_buffer_add_vertex(buf, p0.x, p0.y, p0.z, c);
+	util_cpu_color_buffer_add_vertex(buf, p1.x, p1.y, p1.z, c);
+};
+
+export fn util_cpu_color_buffer_add_point(buf: *E2CpuColorVertexBuffer,
+	p: Vec3, c: Color) void = {
+	util_cpu_color_buffer_add_vertex(buf, p.x, p.y, p.z, c);
+};
+
+export fn util_cpu_color_buffer_add_tri(buf: *E2CpuColorVertexBuffer,
+	p0: Vec3, p1: Vec3, p2: Vec3, c: Color) void = {
+	util_cpu_color_buffer_add_vertex(buf, p0.x, p0.y, p0.z, c);
+	util_cpu_color_buffer_add_vertex(buf, p1.x, p1.y, p1.z, c);
+	util_cpu_color_buffer_add_vertex(buf, p2.x, p2.y, p2.z, c);
+};
+
+export fn util_cpu_color_buffer_slice(buf: *E2CpuColorVertexBuffer) []f32 = {
+	let n: size = (buf.vertex_count * 7): size;
+	return buf.data[0z..n];
+};

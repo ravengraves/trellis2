@@ -1,0 +1,127 @@
+// depth_sensor.pka — Depth sensor for MuJoCo scenes.
+// Renders linearized depth from an arbitrary camera pose via the engine's
+// offscreen depth pass. Output is world-space distance (camera Z) per pixel.
+
+use fmt;
+
+export def DSENS_MAX_W: i32 = 128;
+export def DSENS_MAX_H: i32 = 96;
+def DSENS_MAX_PIXELS: size = 12288z;  // 128 * 96
+def DSENS_MAX_RGB: size = 36864z;     // 128 * 96 * 3
+
+export type DepthSensor = struct {
+	cam: FreeCamera,
+	depth: [DSENS_MAX_PIXELS]f32,
+	rgb: [DSENS_MAX_RGB]u8,
+	width: i32,
+	height: i32,
+};
+
+// Create a depth sensor with given camera parameters and resolution.
+export fn depth_sensor_new(eye: Vec3, target: Vec3,
+	fov: f32, znear: f32, zfar: f32, w: i32, h: i32) DepthSensor = {
+	let cw = w;
+	let ch = h;
+	if (cw > DSENS_MAX_W) { cw = DSENS_MAX_W; };
+	if (ch > DSENS_MAX_H) { ch = DSENS_MAX_H; };
+	if (cw <= 0) { cw = 64; };
+	if (ch <= 0) { ch = 48; };
+	return DepthSensor {
+		cam = freecam_new(eye, target, fov, znear, zfar),
+		depth = [0.0...],
+		rgb = [0...],
+		width = cw,
+		height = ch,
+	};
+};
+
+// Render the scene from the sensor's viewpoint. Fills both depth and rgb buffers.
+// Takes the same geom draws, lights, and environment as the standard render pass.
+export fn depth_sensor_render(sensor: *DepthSensor,
+	geom_draws: []E2GeomDraw, lights: []Light, env: *IrradianceEnv) bool = {
+	let npix: size = (sensor.width * sensor.height): size;
+	let nrgb: size = npix * 3z;
+	let empty = util_color_pass_init();
+	return e2_render_camera_to_buffers(
+		&sensor.cam,
+		E2_GEOM_MODE_PBR,
+		geom_draws,
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		lights,
+		env,
+		sensor.rgb[0z..nrgb],
+		sensor.depth[0z..npix],
+		sensor.width,
+		sensor.height);
+};
+
+// Read depth at a specific pixel. Returns zfar for out-of-bounds.
+export fn depth_sensor_at(sensor: *DepthSensor, x: i32, y: i32) f32 = {
+	if (x < 0 || x >= sensor.width || y < 0 || y >= sensor.height) {
+		return sensor.cam.zfar;
+	};
+	let idx: size = (y * sensor.width + x): size;
+	return sensor.depth[idx];
+};
+
+// Read depth at the center pixel.
+export fn depth_sensor_center_depth(sensor: *DepthSensor) f32 = {
+	return depth_sensor_at(sensor, sensor.width / 2, sensor.height / 2);
+};
+
+// Minimum depth in a rectangular region (closest surface).
+export fn depth_sensor_region_min(sensor: *DepthSensor,
+	x0: i32, y0: i32, x1: i32, y1: i32) f32 = {
+	let min_d = sensor.cam.zfar;
+	for (let ry: i32 = y0; ry < y1; ry += 1) {
+		for (let rx: i32 = x0; rx < x1; rx += 1) {
+			let d = depth_sensor_at(sensor, rx, ry);
+			if (d > 0.0 && d < min_d) { min_d = d; };
+		};
+	};
+	return min_d;
+};
+
+// Average depth in a region, excluding pixels beyond max_depth.
+export fn depth_sensor_region_avg(sensor: *DepthSensor,
+	x0: i32, y0: i32, x1: i32, y1: i32, max_depth: f32) f32 = {
+	let sum: f64 = 0.0;
+	let n: i32 = 0;
+	for (let ry: i32 = y0; ry < y1; ry += 1) {
+		for (let rx: i32 = x0; rx < x1; rx += 1) {
+			let d = depth_sensor_at(sensor, rx, ry);
+			if (d > 0.0 && d < max_depth) {
+				sum = sum + (d: f64);
+				n = n + 1;
+			};
+		};
+	};
+	if (n == 0) { return max_depth; };
+	return (sum / (n: f64)): f32;
+};
+
+// Count pixels with depth below threshold (near objects).
+export fn depth_sensor_count_near(sensor: *DepthSensor, threshold: f32) i32 = {
+	let total = sensor.width * sensor.height;
+	let cnt: i32 = 0;
+	for (let di: i32 = 0; di < total; di += 1) {
+		let d = sensor.depth[di: size];
+		if (d > 0.0 && d < threshold) {
+			cnt = cnt + 1;
+		};
+	};
+	return cnt;
+};
+
+// Count total pixels with any non-zero depth (objects rendered).
+export fn depth_sensor_count_valid(sensor: *DepthSensor) i32 = {
+	let total = sensor.width * sensor.height;
+	let cnt: i32 = 0;
+	for (let vi: i32 = 0; vi < total; vi += 1) {
+		if (sensor.depth[vi: size] > 0.0) {
+			cnt = cnt + 1;
+		};
+	};
+	return cnt;
+};

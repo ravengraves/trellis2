@@ -1,0 +1,235 @@
+// material.pka — PBR material system for Pollyn Engine
+// Cook-Torrance BRDF with Fresnel-Schlick, GGX NDF, Smith geometry.
+// Hemisphere irradiance approximation for ambient lighting.
+
+use math;
+
+// ================================================================
+// Shading modes
+// ================================================================
+
+export def SHADE_FLAT: i32 = 0;
+export def SHADE_PBR:  i32 = 1;
+
+// ================================================================
+// Material: describes surface appearance
+// ================================================================
+
+export type Material = struct {
+	albedo: Color,       // base color
+	metallic: f32,       // 0.0 = dielectric, 1.0 = metal
+	roughness: f32,      // 0.0 = mirror, 1.0 = rough
+	shading: i32,        // SHADE_FLAT or SHADE_PBR
+	texture: u32,        // GL texture handle (0 = no texture)
+};
+
+// ================================================================
+// Irradiance environment: hemisphere lighting approximation
+// ================================================================
+
+export type IrradianceEnv = struct {
+	sky_color: Color,      // hemisphere up
+	ground_color: Color,   // hemisphere down
+	horizon_color: Color,  // blend at equator
+	specular_color: Color, // fake specular reflection tint
+	intensity: f32,        // environment brightness
+};
+
+// ================================================================
+// Constructors
+// ================================================================
+
+export fn material_flat(color: Color) Material = {
+	return Material {
+		albedo = color,
+		metallic = 0.0,
+		roughness = 1.0,
+		shading = SHADE_FLAT,
+		texture = 0u32
+	};
+};
+
+export fn material_pbr(albedo: Color, metallic: f32, roughness: f32) Material = {
+	return Material {
+		albedo = albedo,
+		metallic = metallic,
+		roughness = roughness,
+		shading = SHADE_PBR,
+		texture = 0u32
+	};
+};
+
+export fn env_default() IrradianceEnv = {
+	return IrradianceEnv {
+		sky_color = Color { r = 0.3, g = 0.4, b = 0.6, a = 1.0 },
+		ground_color = Color { r = 0.1, g = 0.08, b = 0.05, a = 1.0 },
+		horizon_color = Color { r = 0.4, g = 0.4, b = 0.4, a = 1.0 },
+		specular_color = Color { r = 0.8, g = 0.85, b = 0.9, a = 1.0 },
+		intensity = 1.0
+	};
+};
+
+// ================================================================
+// Environment sampling
+// ================================================================
+
+export fn env_sample_irradiance(env: *IrradianceEnv, normal: Vec3) Color = {
+	// Blend between ground and sky based on normal.z
+	let up_factor = normal.z * 0.5 + 0.5; // remap [-1,1] to [0,1]
+	let irr_t: f32 = 0.0;
+	let result: Color = color_black();
+	if (up_factor < 0.5) {
+		irr_t = up_factor * 2.0;
+		result = color_lerp(env.ground_color, env.horizon_color, irr_t);
+	} else {
+		irr_t = (up_factor - 0.5) * 2.0;
+		result = color_lerp(env.horizon_color, env.sky_color, irr_t);
+	};
+	return Color {
+		r = result.r * env.intensity,
+		g = result.g * env.intensity,
+		b = result.b * env.intensity,
+		a = 1.0
+	};
+};
+
+export fn env_sample_specular(env: *IrradianceEnv, reflect: Vec3, roughness: f32) Color = {
+	let up_factor = reflect.z * 0.5 + 0.5;
+	// Rough surfaces see more averaged/horizon color
+	let sharpness = 1.0 - roughness;
+	let biased = 0.5 + (up_factor - 0.5) * sharpness;
+	let spec_t: f32 = 0.0;
+	let result: Color = color_black();
+	if (biased < 0.5) {
+		spec_t = biased * 2.0;
+		result = color_lerp(env.ground_color, env.horizon_color, spec_t);
+	} else {
+		spec_t = (biased - 0.5) * 2.0;
+		result = color_lerp(env.horizon_color, env.specular_color, spec_t);
+	};
+	return Color {
+		r = result.r * env.intensity,
+		g = result.g * env.intensity,
+		b = result.b * env.intensity,
+		a = 1.0
+	};
+};
+
+// ================================================================
+// PBR helpers (private)
+// ================================================================
+
+fn pbr_max(a: f32, b: f32) f32 = {
+	if (a > b) { return a; };
+	return b;
+};
+
+fn pbr_clamp01(x: f32) f32 = {
+	if (x < 0.0) { return 0.0; };
+	if (x > 1.0) { return 1.0; };
+	return x;
+};
+
+fn pbr_mix(a: f32, b: f32, t: f32) f32 = {
+	return a + (b - a) * t;
+};
+
+// ================================================================
+// PBR Shading: Cook-Torrance BRDF
+// ================================================================
+
+export fn shade_pbr(normal: Vec3, view_dir: Vec3, light_dir: Vec3,
+                    mat: Material, light_color: Color,
+                    env: *IrradianceEnv) Color = {
+	let n = normal;
+	let v = view_dir;
+	let l = light_dir;
+	let h = vec3_normalize(vec3_add(v, l));
+
+	let ndotl = pbr_max(vec3_dot(n, l), 0.0);
+	let ndotv = pbr_max(vec3_dot(n, v), 0.0001);
+	let ndoth = pbr_max(vec3_dot(n, h), 0.0);
+	let vdoth = pbr_max(vec3_dot(v, h), 0.0);
+
+	let rough = pbr_clamp01(mat.roughness);
+	if (rough < 0.04) { rough = 0.04; }; // prevent division issues
+	let metal = pbr_clamp01(mat.metallic);
+
+	// F0: reflectance at normal incidence
+	let f0_r = pbr_mix(0.04, mat.albedo.r, metal);
+	let f0_g = pbr_mix(0.04, mat.albedo.g, metal);
+	let f0_b = pbr_mix(0.04, mat.albedo.b, metal);
+
+	// Fresnel-Schlick: F = F0 + (1-F0) * (1-VdotH)^5
+	let one_minus_vdoth = 1.0 - vdoth;
+	let omv2 = one_minus_vdoth * one_minus_vdoth;
+	let omv5 = omv2 * omv2 * one_minus_vdoth;
+	let fr_r = f0_r + (1.0 - f0_r) * omv5;
+	let fr_g = f0_g + (1.0 - f0_g) * omv5;
+	let fr_b = f0_b + (1.0 - f0_b) * omv5;
+
+	// GGX Normal Distribution Function
+	// alpha = roughness^2, a2 = alpha^2 = roughness^4
+	let a2 = rough * rough * rough * rough;
+	let denom_d = ndoth * ndoth * (a2 - 1.0) + 1.0;
+	let ndf = a2 / (math::PI * denom_d * denom_d);
+
+	// Smith Geometry function (Schlick-GGX)
+	let k = (rough + 1.0) * (rough + 1.0) / 8.0;
+	let g1_v = ndotv / (ndotv * (1.0 - k) + k);
+	let g1_l = ndotl / (ndotl * (1.0 - k) + k);
+	let geom = g1_v * g1_l;
+
+	// Cook-Torrance specular
+	let spec_denom = 4.0 * ndotv * ndotl + 0.0001;
+	let spec_scale = ndf * geom / spec_denom;
+	let spec_r = fr_r * spec_scale;
+	let spec_g = fr_g * spec_scale;
+	let spec_b = fr_b * spec_scale;
+
+	// Diffuse: Lambert * (1 - F) * (1 - metallic)
+	let kd = 1.0 - metal;
+	let inv_pi = 1.0 / math::PI;
+	let diff_r = mat.albedo.r * kd * (1.0 - fr_r) * inv_pi;
+	let diff_g = mat.albedo.g * kd * (1.0 - fr_g) * inv_pi;
+	let diff_b = mat.albedo.b * kd * (1.0 - fr_b) * inv_pi;
+
+	// Direct lighting
+	let direct_r = (diff_r + spec_r) * light_color.r * ndotl;
+	let direct_g = (diff_g + spec_g) * light_color.g * ndotl;
+	let direct_b = (diff_b + spec_b) * light_color.b * ndotl;
+
+	// Environment / ambient
+	let irr = env_sample_irradiance(env, n);
+	let reflect_dir = vec3_sub(vec3_scale(n, 2.0 * vec3_dot(n, v)), v);
+	let spec_env = env_sample_specular(env, reflect_dir, rough);
+
+	let amb_diff_r = irr.r * mat.albedo.r * kd * 0.3;
+	let amb_diff_g = irr.g * mat.albedo.g * kd * 0.3;
+	let amb_diff_b = irr.b * mat.albedo.b * kd * 0.3;
+
+	let amb_spec_r = spec_env.r * f0_r * 0.3;
+	let amb_spec_g = spec_env.g * f0_g * 0.3;
+	let amb_spec_b = spec_env.b * f0_b * 0.3;
+
+	let out_r = direct_r + amb_diff_r + amb_spec_r;
+	let out_g = direct_g + amb_diff_g + amb_spec_g;
+	let out_b = direct_b + amb_diff_b + amb_spec_b;
+
+	// Reinhard tonemap
+	out_r = out_r / (out_r + 1.0);
+	out_g = out_g / (out_g + 1.0);
+	out_b = out_b / (out_b + 1.0);
+
+	// Gamma correction (sqrt approximation)
+	out_r = math::sqrt(pbr_max(out_r, 0.0));
+	out_g = math::sqrt(pbr_max(out_g, 0.0));
+	out_b = math::sqrt(pbr_max(out_b, 0.0));
+
+	return Color {
+		r = pbr_clamp01(out_r),
+		g = pbr_clamp01(out_g),
+		b = pbr_clamp01(out_b),
+		a = mat.albedo.a
+	};
+};

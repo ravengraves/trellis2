@@ -1,0 +1,131 @@
+// cv.pka — Computer vision / image analysis helpers for framebuffer testing
+// Works on Framebuffer.pixels (u8 RGB triplets). All functions take *Framebuffer.
+
+// Count pixels where any channel exceeds its threshold
+export fn cv_count_above(pfb: *Framebuffer, tr: u8, tg: u8, tb: u8) i32 = {
+	let total = pfb.width * pfb.height;
+	let cnt: i32 = 0;
+	for (let ai: i32 = 0; ai < total; ai += 1) {
+		let idx: size = (ai * 3): size;
+		if (pfb.pixels[idx] > tr || pfb.pixels[idx + 1z] > tg || pfb.pixels[idx + 2z] > tb) {
+			cnt = cnt + 1;
+		};
+	};
+	return cnt;
+};
+
+// Count pixels where red channel dominates and exceeds minimum
+export fn cv_count_red_dominant(pfb: *Framebuffer, min_r: u8) i32 = {
+	let total = pfb.width * pfb.height;
+	let cnt: i32 = 0;
+	for (let ri: i32 = 0; ri < total; ri += 1) {
+		let idx: size = (ri * 3): size;
+		if (pfb.pixels[idx] > min_r &&
+		    pfb.pixels[idx] > pfb.pixels[idx + 1z] &&
+		    pfb.pixels[idx] > pfb.pixels[idx + 2z]) {
+			cnt = cnt + 1;
+		};
+	};
+	return cnt;
+};
+
+// Count pixels where green channel dominates and exceeds minimum
+export fn cv_count_green_dominant(pfb: *Framebuffer, min_g: u8) i32 = {
+	let total = pfb.width * pfb.height;
+	let cnt: i32 = 0;
+	for (let gi: i32 = 0; gi < total; gi += 1) {
+		let idx: size = (gi * 3): size;
+		if (pfb.pixels[idx + 1z] > min_g &&
+		    pfb.pixels[idx + 1z] > pfb.pixels[idx] &&
+		    pfb.pixels[idx + 1z] > pfb.pixels[idx + 2z]) {
+			cnt = cnt + 1;
+		};
+	};
+	return cnt;
+};
+
+// Count pixels where blue channel dominates and exceeds minimum
+export fn cv_count_blue_dominant(pfb: *Framebuffer, min_b: u8) i32 = {
+	let total = pfb.width * pfb.height;
+	let cnt: i32 = 0;
+	for (let bi: i32 = 0; bi < total; bi += 1) {
+		let idx: size = (bi * 3): size;
+		if (pfb.pixels[idx + 2z] > min_b &&
+		    pfb.pixels[idx + 2z] > pfb.pixels[idx] &&
+		    pfb.pixels[idx + 2z] > pfb.pixels[idx + 1z]) {
+			cnt = cnt + 1;
+		};
+	};
+	return cnt;
+};
+
+// Count pixels brighter than threshold (any single channel)
+export fn cv_count_bright(pfb: *Framebuffer, threshold: u8) i32 = {
+	let total = pfb.width * pfb.height;
+	let cnt: i32 = 0;
+	for (let hi: i32 = 0; hi < total; hi += 1) {
+		let idx: size = (hi * 3): size;
+		if (pfb.pixels[idx] > threshold ||
+		    pfb.pixels[idx + 1z] > threshold ||
+		    pfb.pixels[idx + 2z] > threshold) {
+			cnt = cnt + 1;
+		};
+	};
+	return cnt;
+};
+
+// Count pixels that differ between two same-size framebuffers
+export fn cv_count_diffs(pfb1: *Framebuffer, pfb2: *Framebuffer) i32 = {
+	let total = pfb1.width * pfb1.height;
+	let cnt: i32 = 0;
+	for (let di: i32 = 0; di < total; di += 1) {
+		let idx: size = (di * 3): size;
+		if (pfb1.pixels[idx] != pfb2.pixels[idx] ||
+		    pfb1.pixels[idx + 1z] != pfb2.pixels[idx + 1z] ||
+		    pfb1.pixels[idx + 2z] != pfb2.pixels[idx + 2z]) {
+			cnt = cnt + 1;
+		};
+	};
+	return cnt;
+};
+
+// Shorthand: count pixels with any channel > 10
+export fn cv_count_rendered(pfb: *Framebuffer) i32 = {
+	return cv_count_above(pfb, 10, 10, 10);
+};
+
+// Average color in a rectangular region (inline pixel access)
+export fn cv_region_avg(pfb: *Framebuffer, x0: i32, y0: i32, x1: i32, y1: i32) Color = {
+	let rsum: f32 = 0.0;
+	let gsum: f32 = 0.0;
+	let bsum: f32 = 0.0;
+	let n: i32 = 0;
+	for (let ry: i32 = y0; ry < y1; ry += 1) {
+		for (let rx: i32 = x0; rx < x1; rx += 1) {
+			if (rx >= 0 && rx < pfb.width && ry >= 0 && ry < pfb.height) {
+				let idx: size = ((ry * pfb.width + rx) * 3): size;
+				let cr = (pfb.pixels[idx]: f32) / 255.0;
+				let cg = (pfb.pixels[idx + 1z]: f32) / 255.0;
+				let cb = (pfb.pixels[idx + 2z]: f32) / 255.0;
+				rsum = rsum + cr;
+				gsum = gsum + cg;
+				bsum = bsum + cb;
+				n = n + 1;
+			};
+		};
+	};
+	if (n == 0) { return color_black(); };
+	let inv_n = 1.0 / (n: f32);
+	return color_new(rsum * inv_n, gsum * inv_n, bsum * inv_n, 1.0);
+};
+
+// Luminance of a color (0.3*r + 0.6*g + 0.1*b)
+export fn cv_luminance(c: Color) f32 = {
+	return c.r * 0.3 + c.g * 0.6 + c.b * 0.1;
+};
+
+// Average luminance in a rectangular region
+export fn cv_region_luminance(pfb: *Framebuffer, x0: i32, y0: i32, x1: i32, y1: i32) f32 = {
+	let avg = cv_region_avg(pfb, x0, y0, x1, y1);
+	return cv_luminance(avg);
+};

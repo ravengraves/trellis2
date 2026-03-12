@@ -1,0 +1,234 @@
+// camera.pka — Orbit camera for Pollyn Engine
+
+use math;
+
+export type Camera = struct {
+	yaw: f32,      // horizontal angle (degrees)
+	pitch: f32,    // vertical angle (degrees)
+	distance: f32, // distance from target
+	target: Vec3,  // look-at point
+	fov: f32,      // field of view (degrees)
+	znear: f32,
+	zfar: f32,
+	orbit: Mat4,   // homogeneous orbit transform around target
+	last_yaw: f32,
+	last_pitch: f32,
+};
+
+fn camera_angles_to_orbit(yaw: f32, pitch: f32) Mat4 = {
+	let y = mat4_rotate_z(yaw);
+	let x = mat4_rotate_x(-pitch);
+	return mat4_mul(&y, &x);
+};
+
+fn camera_sync_orbit(cam: *Camera) void = {
+	if (cam.yaw != cam.last_yaw || cam.pitch != cam.last_pitch) {
+		cam.orbit = camera_angles_to_orbit(cam.yaw, cam.pitch);
+		cam.last_yaw = cam.yaw;
+		cam.last_pitch = cam.pitch;
+	};
+};
+
+export fn camera_default() Camera = {
+	return Camera {
+		yaw = 45.0,
+		pitch = 30.0,
+		distance = 5.0,
+		target = vec3_zero(),
+		fov = 60.0,
+		znear = 0.1,
+		zfar = 100.0,
+		orbit = camera_angles_to_orbit(45.0, 30.0),
+		last_yaw = 45.0,
+		last_pitch = 30.0
+	};
+};
+
+export fn camera_eye(cam: *Camera) Vec3 = {
+	camera_sync_orbit(cam);
+	let eye_delta = mat4_transform_dir(&cam.orbit, vec3_new(0.0, -cam.distance, 0.0));
+	return vec3_add(cam.target, eye_delta);
+};
+
+export fn camera_view(cam: *Camera) Mat4 = {
+	camera_sync_orbit(cam);
+	let eye = camera_eye(cam);
+	let up = vec3_normalize(mat4_transform_dir(&cam.orbit, vec3_new(0.0, 0.0, 1.0)));
+	return mat4_lookat(eye, cam.target, up);
+};
+
+export fn camera_projection(cam: *Camera, aspect: f32) Mat4 = {
+	return mat4_perspective(cam.fov, aspect, cam.znear, cam.zfar);
+};
+
+export fn camera_view_projection(cam: *Camera, aspect: f32) Mat4 = {
+	let v = camera_view(cam);
+	let p = camera_projection(cam, aspect);
+	return mat4_mul(&p, &v);
+};
+
+export fn camera_orbit(cam: *Camera, dyaw: f32, dpitch: f32) void = {
+	camera_sync_orbit(cam);
+	let world_up = vec3_new(0.0, 0.0, 1.0);
+	let right = vec3_normalize(mat4_transform_dir(&cam.orbit, vec3_new(1.0, 0.0, 0.0)));
+
+	let yaw_rot = mat4_rotate_axis(world_up, dyaw);
+	let pitch_rot = mat4_rotate_axis(right, -dpitch);
+	let step = mat4_mul(&pitch_rot, &yaw_rot);
+	cam.orbit = mat4_mul(&step, &cam.orbit);
+
+	cam.yaw = cam.yaw + dyaw;
+	cam.pitch = cam.pitch + dpitch;
+	cam.last_yaw = cam.yaw;
+	cam.last_pitch = cam.pitch;
+};
+
+export fn camera_zoom(cam: *Camera, delta: f32) void = {
+	cam.distance = cam.distance - delta;
+	let min_dist = cam.znear * 2.0;
+	if (min_dist < 0.05) { min_dist = 0.05; };
+	let max_dist = cam.zfar * 0.9;
+	if (max_dist < min_dist + 0.01) { max_dist = min_dist + 0.01; };
+	if (cam.distance < min_dist) { cam.distance = min_dist; };
+	if (cam.distance > max_dist) { cam.distance = max_dist; };
+};
+
+// ================================================================
+// FreeCamera: arbitrary eye/target positioning
+// ================================================================
+
+export type FreeCamera = struct {
+	eye: Vec3,
+	target: Vec3,
+	up: Vec3,
+	fov: f32,
+	znear: f32,
+	zfar: f32,
+};
+
+export fn freecam_new(eye: Vec3, target: Vec3, fov: f32, znear: f32, zfar: f32) FreeCamera = {
+	return FreeCamera {
+		eye = eye,
+		target = target,
+		up = vec3_new(0.0, 0.0, 1.0),
+		fov = fov,
+		znear = znear,
+		zfar = zfar
+	};
+};
+
+export fn freecam_view(cam: *FreeCamera) Mat4 = {
+	return mat4_lookat(cam.eye, cam.target, cam.up);
+};
+
+export fn freecam_projection(cam: *FreeCamera, aspect: f32) Mat4 = {
+	return mat4_perspective(cam.fov, aspect, cam.znear, cam.zfar);
+};
+
+export fn freecam_view_projection(cam: *FreeCamera, aspect: f32) Mat4 = {
+	let v = freecam_view(cam);
+	let p = freecam_projection(cam, aspect);
+	return mat4_mul(&p, &v);
+};
+
+export fn freecam_from_orbit(cam: *Camera) FreeCamera = {
+	camera_sync_orbit(cam);
+	let eye = camera_eye(cam);
+	return FreeCamera {
+		eye = eye,
+		target = cam.target,
+		up = vec3_normalize(mat4_transform_dir(&cam.orbit, vec3_new(0.0, 0.0, 1.0))),
+		fov = cam.fov,
+		znear = cam.znear,
+		zfar = cam.zfar
+	};
+};
+
+// ================================================================
+// CameraRig: groups multiple cameras
+// ================================================================
+
+def MAX_CAMERAS: size = 4z;
+
+export def RIG_SINGLE: i32 = 0;
+export def RIG_STEREO: i32 = 1;
+export def RIG_CUSTOM: i32 = 2;
+
+export type CameraRig = struct {
+	cameras: [MAX_CAMERAS]FreeCamera,
+	count: i32,
+	rig_type: i32,
+};
+
+fn default_freecam() FreeCamera = {
+	return FreeCamera {
+		eye = vec3_zero(),
+		target = vec3_new(0.0, 1.0, 0.0),
+		up = vec3_new(0.0, 0.0, 1.0),
+		fov = 60.0,
+		znear = 0.1,
+		zfar = 100.0
+	};
+};
+
+export fn rig_single(cam: *FreeCamera) CameraRig = {
+	let rig = CameraRig {
+		cameras = [default_freecam()...],
+		count = 1,
+		rig_type = RIG_SINGLE
+	};
+	rig.cameras[0z] = *cam;
+	return rig;
+};
+
+export fn rig_stereo(cam: *FreeCamera, ipd: f32) CameraRig = {
+	let forward = vec3_normalize(vec3_sub(cam.target, cam.eye));
+	let right = vec3_normalize(vec3_cross(forward, cam.up));
+	let half_ipd = ipd * 0.5;
+
+	let right_offset = vec3_scale(right, half_ipd);
+	let left_offset = vec3_scale(right, -half_ipd);
+
+	let left_eye = vec3_add(cam.eye, left_offset);
+	let left_target = vec3_add(cam.target, left_offset);
+	let right_eye = vec3_add(cam.eye, right_offset);
+	let right_target = vec3_add(cam.target, right_offset);
+
+	let rig = CameraRig {
+		cameras = [default_freecam()...],
+		count = 2,
+		rig_type = RIG_STEREO
+	};
+	rig.cameras[0z] = FreeCamera {
+		eye = left_eye,
+		target = left_target,
+		up = cam.up,
+		fov = cam.fov,
+		znear = cam.znear,
+		zfar = cam.zfar
+	};
+	rig.cameras[1z] = FreeCamera {
+		eye = right_eye,
+		target = right_target,
+		up = cam.up,
+		fov = cam.fov,
+		znear = cam.znear,
+		zfar = cam.zfar
+	};
+	return rig;
+};
+
+export fn rig_custom() CameraRig = {
+	return CameraRig {
+		cameras = [default_freecam()...],
+		count = 0,
+		rig_type = RIG_CUSTOM
+	};
+};
+
+export fn rig_add_camera(rig: *CameraRig, cam: FreeCamera) void = {
+	if (rig.count >= (MAX_CAMERAS: i32)) { return; };
+	let idx: size = rig.count: size;
+	rig.cameras[idx] = cam;
+	rig.count = rig.count + 1;
+};

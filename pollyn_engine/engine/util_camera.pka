@@ -1,0 +1,69 @@
+// util_camera.pka — Common orbit camera controls for engine userspace.
+
+export fn util_camera_apply_orbit_controls(cam: *Camera,
+	input: *InputState,
+	is_terminal: bool) void = {
+	camera_eye(cam);
+
+	if (input.mouse_left) {
+		let orbit_sens: f32 = 0.3;
+		if (is_terminal) { orbit_sens = 1.5; };
+		camera_orbit(cam,
+			-input.mouse_dx * orbit_sens,
+			input.mouse_dy * orbit_sens);
+	};
+
+	if (input.mouse_right || input.mouse_middle) {
+		let cam_eye = camera_eye(cam);
+		let cam_fwd = vec3_normalize(vec3_sub(cam.target, cam_eye));
+		let drag_right = vec3_normalize(vec3_cross(cam_fwd, vec3_new(0.0, 0.0, 1.0)));
+		let drag_up = vec3_cross(drag_right, cam_fwd);
+		let ps = cam.distance * 0.002;
+		if (is_terminal) { ps = cam.distance * 0.02; };
+		let pan = vec3_add(
+			vec3_scale(drag_right, -input.mouse_dx * ps),
+			vec3_scale(drag_up, input.mouse_dy * ps));
+		cam.target = vec3_add(cam.target, pan);
+	};
+
+	if (input.scroll_y != 0.0) {
+		let zoom_step = cam.distance * 0.06 + 0.2;
+		if (is_terminal) {
+			zoom_step = cam.distance * 0.12 + 0.5;
+		};
+		camera_zoom(cam, input.scroll_y * zoom_step);
+	};
+
+	let pan_step = cam.distance * 0.02;
+	let cam_right = vec3_normalize(mat4_transform_dir(&cam.orbit, vec3_new(1.0, 0.0, 0.0)));
+	let cam_up = vec3_normalize(mat4_transform_dir(&cam.orbit, vec3_new(0.0, 0.0, 1.0)));
+	let n_left = input_key_press_count(input, KEY_LEFT);
+	let n_right = input_key_press_count(input, KEY_RIGHT);
+	let n_up = input_key_press_count(input, KEY_UP);
+	let n_down = input_key_press_count(input, KEY_DOWN);
+	let n_pgup = input_key_press_count(input, KEY_PAGE_UP);
+	let n_pgdn = input_key_press_count(input, KEY_PAGE_DOWN);
+
+	if (n_left > 0) {
+		cam.target = vec3_add(cam.target,
+			vec3_scale(cam_right, -pan_step * (n_left: f32)));
+	};
+	if (n_right > 0) {
+		cam.target = vec3_add(cam.target,
+			vec3_scale(cam_right, pan_step * (n_right: f32)));
+	};
+	if (n_up > 0) {
+		cam.target = vec3_add(cam.target,
+			vec3_scale(cam_up, pan_step * (n_up: f32)));
+	};
+	if (n_down > 0) {
+		cam.target = vec3_add(cam.target,
+			vec3_scale(cam_up, -pan_step * (n_down: f32)));
+	};
+	if (n_pgup > 0) { camera_zoom(cam, 0.15 * (n_pgup: f32)); };
+	if (n_pgdn > 0) { camera_zoom(cam, -0.15 * (n_pgdn: f32)); };
+};
+
+export fn util_camera_free_from_orbit(cam: *Camera) FreeCamera = {
+	return freecam_from_orbit(cam);
+};

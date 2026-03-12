@@ -1,0 +1,1019 @@
+// terminal.pka — Terminal renderer for Pollyn Engine
+// Software rasterizer → braille character output via ANSI true-color.
+
+use math;
+use fmt;
+use strings;
+
+// C shim terminal functions
+export @symbol("shim_term_raw_enter") fn shim_term_raw_enter() void;
+export @symbol("shim_term_raw_exit")  fn shim_term_raw_exit() void;
+export @symbol("shim_term_width")     fn shim_term_width() i32;
+export @symbol("shim_term_height")    fn shim_term_height() i32;
+export @symbol("shim_term_write")     fn shim_term_write(data: *u8, len: i32) void;
+
+// ================================================================
+// Framebuffer (software, RGB u8 per pixel)
+// ================================================================
+
+// Max framebuffer size: 320x200 = 64000 pixels * 3 = 192000 bytes
+def FB_MAX_W: i32 = 320;
+def FB_MAX_H: i32 = 200;
+def FB_MAX_PIXELS: size = 64000z;
+def FB_MAX_BYTES: size = 192000z;
+
+// Depth buffer max: 64000 floats
+def DEPTH_MAX: size = 64000z;
+
+export type Framebuffer = struct {
+	pixels: [FB_MAX_BYTES]u8,  // RGB interleaved
+	depth: [DEPTH_MAX]f32,
+	width: i32,
+	height: i32,
+	has_depth: bool,
+};
+
+export fn fb_init(w: i32, h: i32) Framebuffer = {
+	let fw = w;
+	let fh = h;
+	if (fw > FB_MAX_W) { fw = FB_MAX_W; };
+	if (fh > FB_MAX_H) { fh = FB_MAX_H; };
+	return Framebuffer {
+		pixels = [0...],
+		depth = [1000.0...],
+		width = fw,
+		height = fh,
+		has_depth = false
+	};
+};
+
+export fn fb_clear(fb: *Framebuffer, r: u8, g: u8, b: u8) void = {
+	let total: i32 = fb.width * fb.height;
+	for (let i: i32 = 0; i < total; i += 1) {
+		let idx: size = (i * 3): size;
+		fb.pixels[idx]      = r;
+		fb.pixels[idx + 1z] = g;
+		fb.pixels[idx + 2z] = b;
+		fb.depth[i: size] = 1000.0;
+	};
+};
+
+fn fb_set_pixel(fb: *Framebuffer, x: i32, y: i32, z: f32, r: u8, g: u8, b: u8, a: u8) void = {
+	if (x < 0 || x >= fb.width || y < 0 || y >= fb.height) { return; };
+	let pidx: size = (y * fb.width + x): size;
+	if (z >= fb.depth[pidx]) { return; };
+	fb.depth[pidx] = z;
+	let idx: size = pidx * 3z;
+	if (a == 255) {
+		fb.pixels[idx]      = r;
+		fb.pixels[idx + 1z] = g;
+		fb.pixels[idx + 2z] = b;
+	} else {
+		let ai: i32 = a: i32;
+		let inv: i32 = 255 - ai;
+		fb.pixels[idx]      = (((r: i32) * ai + (fb.pixels[idx]: i32) * inv) / 255): u8;
+		fb.pixels[idx + 1z] = (((g: i32) * ai + (fb.pixels[idx + 1z]: i32) * inv) / 255): u8;
+		fb.pixels[idx + 2z] = (((b: i32) * ai + (fb.pixels[idx + 2z]: i32) * inv) / 255): u8;
+	};
+};
+
+fn fb_get_pixel(fb: *Framebuffer, x: i32, y: i32) Color = {
+	if (x < 0 || x >= fb.width || y < 0 || y >= fb.height) {
+		return color_black();
+	};
+	let idx: size = ((y * fb.width + x) * 3): size;
+	let cr = (fb.pixels[idx]: f32) / 255.0;
+	let cg = (fb.pixels[idx + 1z]: f32) / 255.0;
+	let cb = (fb.pixels[idx + 2z]: f32) / 255.0;
+	return color_new(cr, cg, cb, 1.0);
+};
+
+// ================================================================
+// Software Rasterizer — flat-shaded triangles
+// ================================================================
+
+export type TriVertex = struct {
+	pos: Vec3,    // screen-space position (x,y = pixel, z = depth)
+	color: Color, // vertex color
+};
+
+// Edge function for triangle rasterization
+fn edge(a: TriVertex, b: TriVertex, px: f32, py: f32) f32 = {
+	return (b.pos.x - a.pos.x) * (py - a.pos.y) -
+	       (b.pos.y - a.pos.y) * (px - a.pos.x);
+};
+
+fn min3_f32(a: f32, b: f32, c: f32) f32 = {
+	let m = a;
+	if (b < m) { m = b; };
+	if (c < m) { m = c; };
+	return m;
+};
+
+fn max3_f32(a: f32, b: f32, c: f32) f32 = {
+	let m = a;
+	if (b > m) { m = b; };
+	if (c > m) { m = c; };
+	return m;
+};
+
+// Rasterize a single triangle with flat shading
+export fn raster_triangle(fb: *Framebuffer, v0: TriVertex, v1: TriVertex, v2: TriVertex) void = {
+	// Bounding box
+	let min_x = min3_f32(v0.pos.x, v1.pos.x, v2.pos.x);
+	let max_x = max3_f32(v0.pos.x, v1.pos.x, v2.pos.x);
+	let min_y = min3_f32(v0.pos.y, v1.pos.y, v2.pos.y);
+	let max_y = max3_f32(v0.pos.y, v1.pos.y, v2.pos.y);
+
+	let x0 = min_x: i32;
+	let x1 = max_x: i32;
+	let y0 = min_y: i32;
+	let y1 = max_y: i32;
+
+	if (x0 < 0) { x0 = 0; };
+	if (y0 < 0) { y0 = 0; };
+	if (x1 >= fb.width)  { x1 = fb.width - 1; };
+	if (y1 >= fb.height) { y1 = fb.height - 1; };
+
+	// Area of triangle
+	let area = edge(v0, v1, v2.pos.x, v2.pos.y);
+	if (area == 0.0) { return; };
+	let inv_area = math::recip(area);
+
+	for (let py: i32 = y0; py <= y1; py += 1) {
+		for (let px: i32 = x0; px <= x1; px += 1) {
+			let fpx = (px: f32) + 0.5;
+			let fpy = (py: f32) + 0.5;
+
+			let w0 = edge(v1, v2, fpx, fpy) * inv_area;
+			let w1 = edge(v2, v0, fpx, fpy) * inv_area;
+			let w2 = 1.0 - w0 - w1;
+
+			if (w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0) {
+				// Interpolate depth
+				let z = v0.pos.z * w0 + v1.pos.z * w1 + v2.pos.z * w2;
+				// Interpolate color
+				let cr = v0.color.r * w0 + v1.color.r * w1 + v2.color.r * w2;
+				let cg = v0.color.g * w0 + v1.color.g * w1 + v2.color.g * w2;
+				let cb = v0.color.b * w0 + v1.color.b * w1 + v2.color.b * w2;
+
+				let ri: i32 = (cr * 255.0): i32;
+				let gi: i32 = (cg * 255.0): i32;
+				let bi: i32 = (cb * 255.0): i32;
+				if (ri > 255) { ri = 255; }; if (ri < 0) { ri = 0; };
+				if (gi > 255) { gi = 255; }; if (gi < 0) { gi = 0; };
+				if (bi > 255) { bi = 255; }; if (bi < 0) { bi = 0; };
+				fb_set_pixel(fb, px, py, z, ri: u8, gi: u8, bi: u8, 255);
+			};
+		};
+	};
+};
+
+// Rasterize a line (Bresenham)
+export fn raster_line(fb: *Framebuffer, x0: i32, y0: i32, x1: i32, y1: i32,
+                      z: f32, r: u8, g: u8, b: u8, a: u8) void = {
+	let dx = x1 - x0;
+	let dy = y1 - y0;
+	if (dx < 0) { dx = -dx; };
+	if (dy < 0) { dy = -dy; };
+	let sx: i32 = 1; if (x0 > x1) { sx = -1; };
+	let sy: i32 = 1; if (y0 > y1) { sy = -1; };
+	let err = dx - dy;
+
+	let cx = x0;
+	let cy = y0;
+	for (true) {
+		fb_set_pixel(fb, cx, cy, z, r, g, b, a);
+		if (cx == x1 && cy == y1) { break; };
+		let e2 = err * 2;
+		if (e2 > -dy) { err = err - dy; cx = cx + sx; };
+		if (e2 < dx)  { err = err + dx; cy = cy + sy; };
+	};
+};
+
+// ================================================================
+// 3D → Screen-space projection for software rendering
+// ================================================================
+
+export fn project_vertex(mvp: *Mat4, v: Vec3, w: i32, h: i32) TriVertex = {
+	let clip = mat4_project(mvp, v);
+	// NDC → screen coords
+	let sx = (clip.x * 0.5 + 0.5) * (w: f32);
+	let sy = ((1.0 - (clip.y * 0.5 + 0.5))) * (h: f32);
+	return TriVertex {
+		pos = vec3_new(sx, sy, clip.z),
+		color = color_white()
+	};
+};
+
+// ================================================================
+// Braille encoding: 2x4 pixel blocks → Unicode braille (U+2800)
+// ================================================================
+
+// Braille dot mapping: pixel (col, row) → bit index
+// Column 0: bits 0,1,2,6  (rows 0-3)
+// Column 1: bits 3,4,5,7  (rows 0-3)
+
+def BRAILLE_BASE: i32 = 0x2800;
+
+fn braille_dot_bit(col: i32, row: i32) i32 = {
+	// col=0: row 0→bit0, 1→bit1, 2→bit2, 3→bit6
+	// col=1: row 0→bit3, 1→bit4, 2→bit5, 3→bit7
+	if (col == 0) {
+		if (row < 3) { return 1 << row; }
+		else { return 1 << 6; };
+	} else {
+		if (row < 3) { return 1 << (row + 3); }
+		else { return 1 << 7; };
+	};
+};
+
+// ================================================================
+// Terminal output: framebuffer → braille with ANSI truecolor
+// ================================================================
+
+def TERM_STYLE_BRAILLE: i32 = 0;
+def TERM_STYLE_HALFBLOCK: i32 = 1;
+def TERM_CELL_MAX: size = 32000z;
+
+export type TermCell = struct {
+	cp: i32,
+	fg: u32,
+	bg: u32,
+};
+
+export type TermCellBuffer = struct {
+	cells: [TERM_CELL_MAX]TermCell,
+	cols: i32,
+	rows: i32,
+	style: i32,
+	valid: bool,
+};
+
+fn term_cell_default() TermCell = {
+	return TermCell {
+		cp = 32,
+		fg = 0u32,
+		bg = 0u32,
+	};
+};
+
+export fn term_cell_buffer_init() TermCellBuffer = {
+	return TermCellBuffer {
+		cells = [term_cell_default()...],
+		cols = 0,
+		rows = 0,
+		style = -1,
+		valid = false,
+	};
+};
+
+fn term_rgb_pack(r: u8, g: u8, b: u8) u32 = {
+	return (r: u32) | ((g: u32) << 8u32) | ((b: u32) << 16u32);
+};
+
+fn term_rgb_r(rgb: u32) u8 = {
+	return (rgb & 255u32): u8;
+};
+
+fn term_rgb_g(rgb: u32) u8 = {
+	return ((rgb >> 8u32) & 255u32): u8;
+};
+
+fn term_rgb_b(rgb: u32) u8 = {
+	return ((rgb >> 16u32) & 255u32): u8;
+};
+
+// Output buffer (avoids many small writes)
+def TERM_BUF_SIZE: size = 65536z;
+
+export type TermOutput = struct {
+	buf: [TERM_BUF_SIZE]u8,
+	pos: size,
+};
+
+export fn term_output_init() TermOutput = {
+	return TermOutput { buf = [0...], pos = 0z };
+};
+
+fn term_output_flush(out: *TermOutput) void = {
+	if (out.pos > 0z) {
+		shim_term_write(&out.buf[0z], out.pos: i32);
+		out.pos = 0z;
+	};
+};
+
+fn term_output_byte(out: *TermOutput, b: u8) void = {
+	if (out.pos >= TERM_BUF_SIZE - 1z) {
+		term_output_flush(out);
+	};
+	out.buf[out.pos] = b;
+	out.pos = out.pos + 1z;
+};
+
+fn term_output_str(out: *TermOutput, s: str) void = {
+	let data = strings::toutf8(s);
+	let tosi: size = 0z;
+	for (tosi < data.len) {
+		term_output_byte(out, data[tosi]);
+		tosi = tosi + 1z;
+	};
+};
+
+// Write a decimal integer (for ANSI escape codes)
+fn term_output_int(out: *TermOutput, val: i32) void = {
+	let tmp: [12]u8 = [0...];
+	let pos: i32 = 11;
+	let v = val;
+	if (v < 0) { v = 0; };
+	if (v == 0) {
+		term_output_byte(out, '0');
+		return;
+	};
+	for (v > 0 && pos >= 0) {
+		tmp[pos: size] = ('0': u8) + ((v % 10): u8);
+		v = v / 10;
+		pos = pos - 1;
+	};
+	for (let i: i32 = pos + 1; i <= 11; i += 1) {
+		term_output_byte(out, tmp[i: size]);
+	};
+};
+
+fn term_output_csi(out: *TermOutput) void = {
+	term_output_byte(out, 27u8);
+	term_output_byte(out, '[');
+};
+
+fn term_output_reset_sgr(out: *TermOutput) void = {
+	term_output_csi(out);
+	term_output_byte(out, '0');
+	term_output_byte(out, 'm');
+};
+
+fn term_output_cursor_move(out: *TermOutput, row: i32, col: i32) void = {
+	term_output_csi(out);
+	term_output_int(out, row + 1);
+	term_output_byte(out, ';');
+	term_output_int(out, col + 1);
+	term_output_byte(out, 'H');
+};
+
+fn term_output_clear_screen(out: *TermOutput) void = {
+	term_output_csi(out);
+	term_output_byte(out, '2');
+	term_output_byte(out, 'J');
+};
+
+// ANSI truecolor foreground: \e[38;2;R;G;Bm
+fn term_set_fg(out: *TermOutput, r: u8, g: u8, b: u8) void = {
+	term_output_csi(out);
+	term_output_byte(out, '3');
+	term_output_byte(out, '8');
+	term_output_byte(out, ';');
+	term_output_byte(out, '2');
+	term_output_byte(out, ';');
+	term_output_int(out, r: i32);
+	term_output_byte(out, ';');
+	term_output_int(out, g: i32);
+	term_output_byte(out, ';');
+	term_output_int(out, b: i32);
+	term_output_byte(out, 'm');
+};
+
+// ANSI truecolor background: \e[48;2;R;G;Bm
+fn term_set_bg(out: *TermOutput, r: u8, g: u8, b: u8) void = {
+	term_output_csi(out);
+	term_output_byte(out, '4');
+	term_output_byte(out, '8');
+	term_output_byte(out, ';');
+	term_output_byte(out, '2');
+	term_output_byte(out, ';');
+	term_output_int(out, r: i32);
+	term_output_byte(out, ';');
+	term_output_int(out, g: i32);
+	term_output_byte(out, ';');
+	term_output_int(out, b: i32);
+	term_output_byte(out, 'm');
+};
+
+// Write a UTF-8 encoded codepoint
+fn term_output_utf8(out: *TermOutput, cp: i32) void = {
+	if (cp < 0x80) {
+		term_output_byte(out, cp: u8);
+	} else if (cp < 0x800) {
+		term_output_byte(out, (0xC0 | (cp >> 6)): u8);
+		term_output_byte(out, (0x80 | (cp & 0x3F)): u8);
+	} else if (cp < 0x10000) {
+		term_output_byte(out, (0xE0 | (cp >> 12)): u8);
+		term_output_byte(out, (0x80 | ((cp >> 6) & 0x3F)): u8);
+		term_output_byte(out, (0x80 | (cp & 0x3F)): u8);
+	};
+};
+
+// Luminance of a pixel
+fn pixel_luma(fb: *Framebuffer, x: i32, y: i32) f32 = {
+	if (x < 0 || x >= fb.width || y < 0 || y >= fb.height) {
+		return 0.0;
+	};
+	let idx: size = ((y * fb.width + x) * 3): size;
+	let r = (fb.pixels[idx]: f32) / 255.0;
+	let g = (fb.pixels[idx + 1z]: f32) / 255.0;
+	let b = (fb.pixels[idx + 2z]: f32) / 255.0;
+	return r * 0.299 + g * 0.587 + b * 0.114;
+};
+
+// Average color of a 2x4 block (for foreground color)
+fn block_avg_color(fb: *Framebuffer, bx: i32, by: i32) Color = {
+	let tr: f32 = 0.0;
+	let tg: f32 = 0.0;
+	let tb: f32 = 0.0;
+	let count: f32 = 0.0;
+	for (let dy: i32 = 0; dy < 4; dy += 1) {
+		for (let dx: i32 = 0; dx < 2; dx += 1) {
+			let px = bx + dx;
+			let py = by + dy;
+			if (px < fb.width && py < fb.height) {
+				let idx: size = ((py * fb.width + px) * 3): size;
+				let luma = pixel_luma(fb, px, py);
+				if (luma > 0.05) {
+					tr = tr + (fb.pixels[idx]: f32);
+					tg = tg + (fb.pixels[idx + 1z]: f32);
+					tb = tb + (fb.pixels[idx + 2z]: f32);
+					count = count + 1.0;
+				};
+			};
+		};
+	};
+	if (count < 1.0) {
+		return color_black();
+	};
+	let inv = math::recip(count);
+	return Color {
+		r = tr * inv,
+		g = tg * inv,
+		b = tb * inv,
+		a = 255.0
+	};
+};
+
+// Render framebuffer to terminal using braille characters
+export fn term_render_braille(fb: *Framebuffer, cols: i32, rows: i32) void = {
+	let out = term_output_init();
+
+	// Cursor home
+	term_output_str(&out, "\x1b[H");
+
+	// Lower threshold so dim pixels survive terminal quantization.
+	let threshold: f32 = 0.10;
+
+	// Each braille char covers 2 columns x 4 rows of pixels
+	for (let ty: i32 = 0; ty < rows; ty += 1) {
+		for (let tx: i32 = 0; tx < cols; tx += 1) {
+			let bx = tx * 2;
+			let by = ty * 4;
+
+			let dots: i32 = 0;
+			for (let dy: i32 = 0; dy < 4; dy += 1) {
+				for (let dx: i32 = 0; dx < 2; dx += 1) {
+					let luma = pixel_luma(fb, bx + dx, by + dy);
+					if (luma > threshold) {
+						dots = dots | braille_dot_bit(dx, dy);
+					};
+				};
+			};
+
+			if (dots > 0) {
+				let avg = block_avg_color(fb, bx, by);
+				term_set_fg(&out, avg.r: u8, avg.g: u8, avg.b: u8);
+			};
+			term_output_utf8(&out, BRAILLE_BASE + dots);
+		};
+		// Reset and newline
+		term_output_str(&out, "\x1b[0m\n");
+	};
+
+	term_output_flush(&out);
+};
+
+// Full-line braille render for terminals that do not support cursor positioning.
+// Emits complete rows with newlines and no cursor-move escape sequences.
+export fn term_render_braille_lines(fb: *Framebuffer, cols: i32, rows: i32) void = {
+	let cw = cols;
+	let rh = rows;
+	let max_cols = fb.width / 2;
+	let max_rows = fb.height / 4;
+	if (cw > max_cols) { cw = max_cols; };
+	if (rh > max_rows) { rh = max_rows; };
+	if (cw < 0) { cw = 0; };
+	if (rh < 0) { rh = 0; };
+
+	let out = term_output_init();
+	let threshold: f32 = 0.10;
+
+	for (let ty: i32 = 0; ty < rh; ty += 1) {
+		for (let tx: i32 = 0; tx < cw; tx += 1) {
+			let bx = tx * 2;
+			let by = ty * 4;
+
+			let dots: i32 = 0;
+			for (let dy: i32 = 0; dy < 4; dy += 1) {
+				for (let dx: i32 = 0; dx < 2; dx += 1) {
+					let luma = pixel_luma(fb, bx + dx, by + dy);
+					if (luma > threshold) {
+						dots = dots | braille_dot_bit(dx, dy);
+					};
+				};
+			};
+
+			if (dots > 0) {
+				let avg = block_avg_color(fb, bx, by);
+				term_set_fg(&out, avg.r: u8, avg.g: u8, avg.b: u8);
+			};
+			term_output_utf8(&out, BRAILLE_BASE + dots);
+		};
+		term_output_reset_sgr(&out);
+		term_output_byte(&out, '\n');
+	};
+
+	term_output_flush(&out);
+};
+
+// Convert + diff + emit only changed braille cells.
+// Returns number of changed terminal cells emitted.
+export fn term_render_braille_delta(fb: *Framebuffer,
+	cols: i32,
+	rows: i32,
+	back: *TermCellBuffer,
+	force_full: bool) i32 = {
+	let cw = cols;
+	let rh = rows;
+	let max_cols = fb.width / 2;
+	let max_rows = fb.height / 4;
+	if (cw > max_cols) { cw = max_cols; };
+	if (rh > max_rows) { rh = max_rows; };
+	if (cw < 0) { cw = 0; };
+	if (rh < 0) { rh = 0; };
+
+	let full_redraw = force_full ||
+		(!back.valid) ||
+		(back.style != TERM_STYLE_BRAILLE) ||
+		(back.cols != cw) ||
+		(back.rows != rh);
+
+	let out = term_output_init();
+	if (full_redraw) {
+		term_output_clear_screen(&out);
+	};
+
+	let changed: i32 = 0;
+	let active_fg: u32 = 0xFFFFFFFFu32;
+
+	let luma_r: f32 = 0.299;
+	let luma_g: f32 = 0.587;
+	let luma_b: f32 = 0.114;
+	let threshold: f32 = 0.10;
+
+	for (let ty: i32 = 0; ty < rh; ty += 1) {
+		let py = ty * 4;
+		let in_run = false;
+		for (let tx: i32 = 0; tx < cw; tx += 1) {
+			let px = tx * 2;
+
+			// Load 8 RGB pixels (2x4 block), fp32 luma + color accumulation.
+			let i0: size = ((py * fb.width + px) * 3): size;
+			let i1: size = ((((py + 1) * fb.width) + px) * 3): size;
+			let i2: size = ((((py + 2) * fb.width) + px) * 3): size;
+			let i3: size = ((((py + 3) * fb.width) + px) * 3): size;
+
+			let r00 = fb.pixels[i0]: f32;
+			let g00 = fb.pixels[i0 + 1z]: f32;
+			let b00 = fb.pixels[i0 + 2z]: f32;
+			let r01 = fb.pixels[i0 + 3z]: f32;
+			let g01 = fb.pixels[i0 + 4z]: f32;
+			let b01 = fb.pixels[i0 + 5z]: f32;
+
+			let r10 = fb.pixels[i1]: f32;
+			let g10 = fb.pixels[i1 + 1z]: f32;
+			let b10 = fb.pixels[i1 + 2z]: f32;
+			let r11 = fb.pixels[i1 + 3z]: f32;
+			let g11 = fb.pixels[i1 + 4z]: f32;
+			let b11 = fb.pixels[i1 + 5z]: f32;
+
+			let r20 = fb.pixels[i2]: f32;
+			let g20 = fb.pixels[i2 + 1z]: f32;
+			let b20 = fb.pixels[i2 + 2z]: f32;
+			let r21 = fb.pixels[i2 + 3z]: f32;
+			let g21 = fb.pixels[i2 + 4z]: f32;
+			let b21 = fb.pixels[i2 + 5z]: f32;
+
+			let r30 = fb.pixels[i3]: f32;
+			let g30 = fb.pixels[i3 + 1z]: f32;
+			let b30 = fb.pixels[i3 + 2z]: f32;
+			let r31 = fb.pixels[i3 + 3z]: f32;
+			let g31 = fb.pixels[i3 + 4z]: f32;
+			let b31 = fb.pixels[i3 + 5z]: f32;
+
+			let y00 = r00 * luma_r + g00 * luma_g + b00 * luma_b;
+			let y01 = r01 * luma_r + g01 * luma_g + b01 * luma_b;
+			let y10 = r10 * luma_r + g10 * luma_g + b10 * luma_b;
+			let y11 = r11 * luma_r + g11 * luma_g + b11 * luma_b;
+			let y20 = r20 * luma_r + g20 * luma_g + b20 * luma_b;
+			let y21 = r21 * luma_r + g21 * luma_g + b21 * luma_b;
+			let y30 = r30 * luma_r + g30 * luma_g + b30 * luma_b;
+			let y31 = r31 * luma_r + g31 * luma_g + b31 * luma_b;
+
+			let dots: i32 = 0;
+			let sum_r: f32 = 0.0;
+			let sum_g: f32 = 0.0;
+			let sum_b: f32 = 0.0;
+			let count: f32 = 0.0;
+
+			if (y00 > threshold) {
+				dots = dots | 1;
+				sum_r = sum_r + r00; sum_g = sum_g + g00; sum_b = sum_b + b00; count = count + 1.0;
+			};
+			if (y01 > threshold) {
+				dots = dots | 8;
+				sum_r = sum_r + r01; sum_g = sum_g + g01; sum_b = sum_b + b01; count = count + 1.0;
+			};
+			if (y10 > threshold) {
+				dots = dots | 2;
+				sum_r = sum_r + r10; sum_g = sum_g + g10; sum_b = sum_b + b10; count = count + 1.0;
+			};
+			if (y11 > threshold) {
+				dots = dots | 16;
+				sum_r = sum_r + r11; sum_g = sum_g + g11; sum_b = sum_b + b11; count = count + 1.0;
+			};
+			if (y20 > threshold) {
+				dots = dots | 4;
+				sum_r = sum_r + r20; sum_g = sum_g + g20; sum_b = sum_b + b20; count = count + 1.0;
+			};
+			if (y21 > threshold) {
+				dots = dots | 32;
+				sum_r = sum_r + r21; sum_g = sum_g + g21; sum_b = sum_b + b21; count = count + 1.0;
+			};
+			if (y30 > threshold) {
+				dots = dots | 64;
+				sum_r = sum_r + r30; sum_g = sum_g + g30; sum_b = sum_b + b30; count = count + 1.0;
+			};
+			if (y31 > threshold) {
+				dots = dots | 128;
+				sum_r = sum_r + r31; sum_g = sum_g + g31; sum_b = sum_b + b31; count = count + 1.0;
+			};
+
+			let cp = BRAILLE_BASE + dots;
+			let fg = 0u32;
+			if (dots != 0 && count > 0.0) {
+				let inv = 1.0 / count;
+				let fr = sum_r * inv + 0.5;
+				let fgf = sum_g * inv + 0.5;
+				let fbv = sum_b * inv + 0.5;
+
+				let rr = fr: i32;
+				let gg = fgf: i32;
+				let bb = fbv: i32;
+				if (rr < 0) { rr = 0; };
+				if (gg < 0) { gg = 0; };
+				if (bb < 0) { bb = 0; };
+				if (rr > 255) { rr = 255; };
+				if (gg > 255) { gg = 255; };
+				if (bb > 255) { bb = 255; };
+				fg = term_rgb_pack(rr: u8, gg: u8, bb: u8);
+			};
+
+			let ci: size = (ty * cw + tx): size;
+			let prev = &back.cells[ci];
+			let diff = full_redraw || prev.cp != cp || prev.fg != fg;
+
+			if (diff) {
+				if (!in_run) {
+					term_output_cursor_move(&out, ty, tx);
+					in_run = true;
+					active_fg = 0xFFFFFFFFu32;
+				};
+
+				if (fg != active_fg) {
+					term_set_fg(&out, term_rgb_r(fg), term_rgb_g(fg), term_rgb_b(fg));
+					active_fg = fg;
+				};
+
+				term_output_utf8(&out, cp);
+				prev.cp = cp;
+				prev.fg = fg;
+				prev.bg = 0u32;
+				changed = changed + 1;
+			} else {
+				in_run = false;
+			};
+		};
+	};
+
+	back.cols = cw;
+	back.rows = rh;
+	back.style = TERM_STYLE_BRAILLE;
+	back.valid = true;
+
+	if (full_redraw || changed > 0) {
+		term_output_reset_sgr(&out);
+		term_output_flush(&out);
+	};
+
+	return changed;
+};
+
+// Convert + diff + emit only changed half-block cells.
+// Returns number of changed terminal cells emitted.
+export fn term_render_halfblock_delta(fb: *Framebuffer,
+	cols: i32,
+	rows: i32,
+	back: *TermCellBuffer,
+	force_full: bool) i32 = {
+	let cw = cols;
+	let rh = rows;
+	let max_cols = fb.width;
+	let max_rows = fb.height / 2;
+	if (cw > max_cols) { cw = max_cols; };
+	if (rh > max_rows) { rh = max_rows; };
+	if (cw < 0) { cw = 0; };
+	if (rh < 0) { rh = 0; };
+
+	let full_redraw = force_full ||
+		(!back.valid) ||
+		(back.style != TERM_STYLE_HALFBLOCK) ||
+		(back.cols != cw) ||
+		(back.rows != rh);
+
+	let out = term_output_init();
+	if (full_redraw) {
+		term_output_clear_screen(&out);
+	};
+
+	let changed: i32 = 0;
+	let active_fg: u32 = 0xFFFFFFFFu32;
+	let active_bg: u32 = 0xFFFFFFFFu32;
+
+	for (let ty: i32 = 0; ty < rh; ty += 1) {
+		let py = ty * 2;
+		let in_run = false;
+		for (let tx: i32 = 0; tx < cw; tx += 1) {
+			let itop: size = ((py * fb.width + tx) * 3): size;
+			let ibot: size = ((((py + 1) * fb.width) + tx) * 3): size;
+
+			let fg = term_rgb_pack(fb.pixels[itop], fb.pixels[itop + 1z], fb.pixels[itop + 2z]);
+			let bg = term_rgb_pack(fb.pixels[ibot], fb.pixels[ibot + 1z], fb.pixels[ibot + 2z]);
+
+			let cp = 0x2580;
+			let ci: size = (ty * cw + tx): size;
+			let prev = &back.cells[ci];
+			let diff = full_redraw || prev.cp != cp || prev.fg != fg || prev.bg != bg;
+
+			if (diff) {
+				if (!in_run) {
+					term_output_cursor_move(&out, ty, tx);
+					in_run = true;
+					active_fg = 0xFFFFFFFFu32;
+					active_bg = 0xFFFFFFFFu32;
+				};
+
+				if (fg != active_fg) {
+					term_set_fg(&out, term_rgb_r(fg), term_rgb_g(fg), term_rgb_b(fg));
+					active_fg = fg;
+				};
+				if (bg != active_bg) {
+					term_set_bg(&out, term_rgb_r(bg), term_rgb_g(bg), term_rgb_b(bg));
+					active_bg = bg;
+				};
+
+				term_output_utf8(&out, cp);
+				prev.cp = cp;
+				prev.fg = fg;
+				prev.bg = bg;
+				changed = changed + 1;
+			} else {
+				in_run = false;
+			};
+		};
+	};
+
+	back.cols = cw;
+	back.rows = rh;
+	back.style = TERM_STYLE_HALFBLOCK;
+	back.valid = true;
+
+	if (full_redraw || changed > 0) {
+		term_output_reset_sgr(&out);
+		term_output_flush(&out);
+	};
+
+	return changed;
+};
+
+// Full-line half-cell render for terminals that do not support cursor positioning.
+// Emits complete rows with newlines and no cursor-move escape sequences.
+export fn term_render_halfblock_lines(fb: *Framebuffer, cols: i32, rows: i32) void = {
+	let cw = cols;
+	let rh = rows;
+	let max_cols = fb.width;
+	let max_rows = fb.height / 2;
+	if (cw > max_cols) { cw = max_cols; };
+	if (rh > max_rows) { rh = max_rows; };
+	if (cw < 0) { cw = 0; };
+	if (rh < 0) { rh = 0; };
+
+	let out = term_output_init();
+	for (let ty: i32 = 0; ty < rh; ty += 1) {
+		let py = ty * 2;
+		for (let tx: i32 = 0; tx < cw; tx += 1) {
+			let itop: size = ((py * fb.width + tx) * 3): size;
+			let ibot: size = ((((py + 1) * fb.width) + tx) * 3): size;
+			let tr = fb.pixels[itop];
+			let tg = fb.pixels[itop + 1z];
+			let tb = fb.pixels[itop + 2z];
+			let br = fb.pixels[ibot];
+			let bg = fb.pixels[ibot + 1z];
+			let bb = fb.pixels[ibot + 2z];
+
+			term_set_fg(&out, tr, tg, tb);
+			term_set_bg(&out, br, bg, bb);
+			term_output_utf8(&out, 0x2580);
+		};
+		term_output_reset_sgr(&out);
+		term_output_byte(&out, '\n');
+	};
+	term_output_flush(&out);
+};
+
+// Render framebuffer using half-block characters (▀ U+2580)
+// Each character covers 2 vertical pixels: top=foreground, bottom=background
+export fn term_render_halfblock(fb: *Framebuffer, cols: i32, rows: i32) void = {
+	let out = term_output_init();
+	term_output_str(&out, "\x1b[H");
+
+	for (let ty: i32 = 0; ty < rows; ty += 1) {
+		for (let tx: i32 = 0; tx < cols; tx += 1) {
+			let py_top = ty * 2;
+			let py_bot = ty * 2 + 1;
+
+			let idx_top: size = ((py_top * fb.width + tx) * 3): size;
+			let idx_bot: size = ((py_bot * fb.width + tx) * 3): size;
+
+			let tr: u8 = 0; let tg: u8 = 0; let tb: u8 = 0;
+			let br: u8 = 0; let bg: u8 = 0; let bb: u8 = 0;
+
+			if (py_top < fb.height && tx < fb.width) {
+				tr = fb.pixels[idx_top];
+				tg = fb.pixels[idx_top + 1z];
+				tb = fb.pixels[idx_top + 2z];
+			};
+			if (py_bot < fb.height && tx < fb.width) {
+				br = fb.pixels[idx_bot];
+				bg = fb.pixels[idx_bot + 1z];
+				bb = fb.pixels[idx_bot + 2z];
+			};
+
+			term_set_fg(&out, tr, tg, tb);
+			term_set_bg(&out, br, bg, bb);
+			// Upper half block ▀
+			term_output_utf8(&out, 0x2580);
+		};
+		term_output_str(&out, "\x1b[0m\n");
+	};
+
+	term_output_flush(&out);
+};
+
+// ================================================================
+// Text overlay on terminal (row, col positioning)
+// ================================================================
+
+def MAX_TERM_TEXT: size = 32z;
+def MAX_TERM_TEXT_LEN: size = 64z;
+
+export type TermTextItem = struct {
+	col: i32,
+	row: i32,
+	text: [MAX_TERM_TEXT_LEN]u8,
+	text_len: i32,
+	r: u8, g: u8, b: u8,
+};
+
+export type TermTextOverlay = struct {
+	items: [MAX_TERM_TEXT]TermTextItem,
+	count: i32,
+};
+
+export fn term_text_init() TermTextOverlay = {
+	return TermTextOverlay {
+		items = [TermTextItem {
+			col = 0, row = 0,
+			text = [0...], text_len = 0,
+			r = 255, g = 255, b = 255
+		}...],
+		count = 0
+	};
+};
+
+export fn term_text_clear(overlay: *TermTextOverlay) void = {
+	overlay.count = 0;
+};
+
+export fn term_text_add(overlay: *TermTextOverlay, col: i32, row: i32,
+                        s: str, r: u8, g: u8, b: u8) void = {
+	if (overlay.count >= (MAX_TERM_TEXT: i32)) { return; };
+	let idx: size = overlay.count: size;
+	overlay.items[idx].col = col;
+	overlay.items[idx].row = row;
+	overlay.items[idx].r = r;
+	overlay.items[idx].g = g;
+	overlay.items[idx].b = b;
+
+	let data = strings::toutf8(s);
+	let copy_len: i32 = data.len: i32;
+	if (copy_len > (MAX_TERM_TEXT_LEN: i32) - 1) {
+		copy_len = (MAX_TERM_TEXT_LEN: i32) - 1;
+	};
+	for (let i: i32 = 0; i < copy_len; i += 1) {
+		overlay.items[idx].text[i: size] = data[i: size];
+	};
+	overlay.items[idx].text_len = copy_len;
+	overlay.count = overlay.count + 1;
+};
+
+export fn term_text_render(overlay: *TermTextOverlay) void = {
+	let out = term_output_init();
+	for (let i: i32 = 0; i < overlay.count; i += 1) {
+		let item = &overlay.items[i: size];
+		// Move cursor to position
+		term_output_str(&out, "\x1b[");
+		term_output_int(&out, item.row + 1);
+		term_output_byte(&out, ';');
+		term_output_int(&out, item.col + 1);
+		term_output_byte(&out, 'H');
+		// Set color
+		term_set_fg(&out, item.r, item.g, item.b);
+		// Write text
+		for (let j: i32 = 0; j < item.text_len; j += 1) {
+			term_output_byte(&out, item.text[j: size]);
+		};
+	};
+	term_output_str(&out, "\x1b[0m");
+	term_output_flush(&out);
+};
+
+// Draw UTF-8 bytes directly with wrap-to-next-row behavior.
+// Wrapping keeps the same starting column for each new row.
+export fn term_text_draw_wrapped_bytes(data: []u8,
+	start_col: i32, start_row: i32,
+	r: u8, g: u8, b: u8,
+	cols: i32, rows: i32) void = {
+	let nbytes: i32 = data.len: i32;
+	if (nbytes <= 0 || cols <= 0 || rows <= 0) { return; };
+
+	let origin_col = start_col;
+	let col = start_col;
+	let row = start_row;
+
+	if (col < 0) { col = 0; };
+	if (row < 0) { row = 0; };
+	if (col >= cols) { col = cols - 1; };
+	if (row >= rows) { row = rows - 1; };
+
+	let out = term_output_init();
+	term_set_fg(&out, r, g, b);
+
+	let i: i32 = 0;
+	for (i < nbytes && row < rows) {
+		let ch = data[i: size];
+
+		if (ch == 10u8) {
+			col = origin_col;
+			if (col < 0) { col = 0; };
+			if (col >= cols) { col = cols - 1; };
+			row = row + 1;
+			i = i + 1;
+			continue;
+		};
+
+		if (col >= cols) {
+			col = origin_col;
+			if (col < 0) { col = 0; };
+			if (col >= cols) { col = cols - 1; };
+			row = row + 1;
+			if (row >= rows) { break; };
+		};
+
+		term_output_str(&out, "\x1b[");
+		term_output_int(&out, row + 1);
+		term_output_byte(&out, ';');
+		term_output_int(&out, col + 1);
+		term_output_byte(&out, 'H');
+		term_output_byte(&out, ch);
+
+		col = col + 1;
+		i = i + 1;
+	};
+
+	term_output_str(&out, "\x1b[0m");
+	term_output_flush(&out);
+};

@@ -1,0 +1,430 @@
+// renderer.pka — 3D renderer for Pollyn Engine
+// GPU-accelerated via OpenGL ES 2.0 shim for all modes.
+
+use math;
+use file;
+
+// C shim GL functions (declared for GL mode)
+export @symbol("shim_gl_viewport")       fn shim_gl_viewport(x: i32, y: i32, w: i32, h: i32) void;
+export @symbol("shim_gl_clear")          fn shim_gl_clear(r: f32, g: f32, b: f32, a: f32) void;
+export @symbol("shim_gl_enable_depth")   fn shim_gl_enable_depth() void;
+export @symbol("shim_gl_disable_depth")  fn shim_gl_disable_depth() void;
+export @symbol("shim_gl_enable_blend")   fn shim_gl_enable_blend() void;
+export @symbol("shim_gl_disable_blend")  fn shim_gl_disable_blend() void;
+export @symbol("shim_gl_line_width")     fn shim_gl_line_width(w: f32) void;
+
+// Shader functions
+export @symbol("shim_gl_compile_shader") fn shim_gl_compile_shader(vert: *u8, frag: *u8) u32;
+export @symbol("shim_gl_delete_shader")  fn shim_gl_delete_shader(prog: u32) void;
+export @symbol("shim_gl_use_shader")     fn shim_gl_use_shader(prog: u32) void;
+export @symbol("shim_gl_get_uniform")    fn shim_gl_get_uniform(prog: u32, name: *u8) i32;
+export @symbol("shim_gl_get_attrib")     fn shim_gl_get_attrib(prog: u32, name: *u8) i32;
+export @symbol("shim_gl_uniform_mat4")   fn shim_gl_uniform_mat4(loc: i32, m: *f32) void;
+export @symbol("shim_gl_uniform_4f")     fn shim_gl_uniform_4f(loc: i32, x: f32, y: f32, z: f32, w: f32) void;
+export @symbol("shim_gl_uniform_3f")     fn shim_gl_uniform_3f(loc: i32, x: f32, y: f32, z: f32) void;
+export @symbol("shim_gl_uniform_1f")     fn shim_gl_uniform_1f(loc: i32, v: f32) void;
+export @symbol("shim_gl_uniform_1i")     fn shim_gl_uniform_1i(loc: i32, v: i32) void;
+
+// Buffer functions
+export @symbol("shim_gl_create_vbo")     fn shim_gl_create_vbo(data: *f32, count: i32) u32;
+export @symbol("shim_gl_create_ibo")     fn shim_gl_create_ibo(data: *u16, count: i32) u32;
+export @symbol("shim_gl_delete_buffer")  fn shim_gl_delete_buffer(buf: u32) void;
+
+// Draw functions
+export @symbol("shim_gl_draw_triangles") fn shim_gl_draw_triangles(
+	vbo: u32, ibo: u32, attr_pos: i32, attr_norm: i32, index_count: i32) void;
+export @symbol("shim_gl_draw_lines")     fn shim_gl_draw_lines(
+	vbo: u32, attr_pos: i32, attr_color: i32, vertex_count: i32) void;
+
+// Window functions
+export @symbol("shim_window_create")       fn shim_window_create(w: i32, h: i32, title: *u8) i32;
+export @symbol("shim_window_destroy")      fn shim_window_destroy() void;
+export @symbol("shim_window_should_close") fn shim_window_should_close() i32;
+export @symbol("shim_window_poll")         fn shim_window_poll() void;
+export @symbol("shim_window_swap")         fn shim_window_swap() void;
+export @symbol("shim_window_width")        fn shim_window_width() i32;
+export @symbol("shim_window_height")       fn shim_window_height() i32;
+export @symbol("shim_time")               fn shim_time() f64;
+
+// FBO functions
+export @symbol("shim_gl_fbo_create")     fn shim_gl_fbo_create(w: i32, h: i32) i32;
+export @symbol("shim_gl_fbo_bind")       fn shim_gl_fbo_bind() void;
+export @symbol("shim_gl_fbo_unbind")     fn shim_gl_fbo_unbind() void;
+export @symbol("shim_gl_fbo_destroy")    fn shim_gl_fbo_destroy() void;
+export @symbol("shim_gl_fbo_read_pixels_flipped") fn shim_gl_fbo_read_pixels_flipped(out: *u8, w: i32, h: i32) void;
+
+// New GL pipeline functions
+export @symbol("shim_gl_init_offscreen") fn shim_gl_init_offscreen() i32;
+export @symbol("shim_gl_init_shaders")   fn shim_gl_init_shaders(
+	flat_vs: *u8, flat_fs: *u8,
+	pbr_vs: *u8, pbr_fs: *u8,
+	cell_vs: *u8, cell_fs: *u8,
+	wire_vs: *u8, wire_fs: *u8,
+	line_vs: *u8, line_fs: *u8,
+	depth_vs: *u8, depth_fs: *u8,
+	text_vs: *u8, text_fs: *u8) i32;
+
+export @symbol("shim_gl_begin_flat") fn shim_gl_begin_flat(
+	mvp: *f32, model: *f32,
+	ldx: f32, ldy: f32, ldz: f32,
+	lr: f32, lg: f32, lb: f32,
+	cr: f32, cg: f32, cb: f32, ca: f32) void;
+
+export @symbol("shim_gl_begin_pbr") fn shim_gl_begin_pbr(
+	mvp: *f32, model: *f32,
+	ldx: f32, ldy: f32, ldz: f32,
+	lr: f32, lg: f32, lb: f32,
+	ex: f32, ey: f32, ez: f32,
+	ar: f32, ag: f32, ab: f32,
+	metallic: f32, roughness: f32,
+	env_data: *f32, alpha: f32) void;
+
+export @symbol("shim_gl_begin_cell") fn shim_gl_begin_cell(
+	mvp: *f32, model: *f32,
+	ldx: f32, ldy: f32, ldz: f32,
+	lr: f32, lg: f32, lb: f32,
+	cr: f32, cg: f32, cb: f32, ca: f32) void;
+
+export @symbol("shim_gl_set_albedo_texture") fn shim_gl_set_albedo_texture(
+	tex: u32) void;
+
+export @symbol("shim_gl_draw_mesh") fn shim_gl_draw_mesh(
+	verts: *f32, vert_floats: i32,
+	indices: *u16, index_count: i32) void;
+
+export @symbol("shim_gl_draw_lines_batch") fn shim_gl_draw_lines_batch(
+	verts: *f32, vert_count: i32, mvp: *f32) void;
+
+export @symbol("shim_gl_draw_line_segment") fn shim_gl_draw_line_segment(
+	verts: *f32, mvp: *f32, width: f32) void;
+
+def SHADER_MAX_BYTES: size = 16384z;
+
+export fn shader_read_into(path: str, out: []u8) bool = {
+	if (!file::Exists(path)) { return false; };
+	let size_i64 = file::Size(path);
+	if (size_i64 <= 0) { return false; };
+	let size_bytes: size = size_i64: size;
+	if (size_bytes + 1z > out.len) { return false; };
+
+	let fd = file::MustOpen(path, "r");
+	let read_n = file::MustRead(fd, out[0z..size_bytes]);
+
+	file::Close(fd);
+	if (read_n != size_i64) { return false; };
+	out[size_bytes] = 0u8;
+	return true;
+};
+
+export fn renderer_init_shaders() bool = {
+	let flat_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let flat_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let pbr_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let pbr_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let cell_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let cell_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let wire_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let wire_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let line_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let line_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let depth_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let depth_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let text_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
+	let text_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
+
+	if (!shader_read_into("pollyn_engine/shaders/flat.vert", flat_vs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/flat.frag", flat_fs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/pbr.vert", pbr_vs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/pbr.frag", pbr_fs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/cell.vert", cell_vs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/cell.frag", cell_fs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/wire.vert", wire_vs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/wire.frag", wire_fs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/line.vert", line_vs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/line.frag", line_fs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/depth.vert", depth_vs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/depth.frag", depth_fs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/text.vert", text_vs_src[0z..])) { return false; };
+	if (!shader_read_into("pollyn_engine/shaders/text.frag", text_fs_src[0z..])) { return false; };
+
+	let status = shim_gl_init_shaders(
+		&flat_vs_src[0z], &flat_fs_src[0z],
+		&pbr_vs_src[0z], &pbr_fs_src[0z],
+		&cell_vs_src[0z], &cell_fs_src[0z],
+		&wire_vs_src[0z], &wire_fs_src[0z],
+		&line_vs_src[0z], &line_fs_src[0z],
+		&depth_vs_src[0z], &depth_fs_src[0z],
+		&text_vs_src[0z], &text_fs_src[0z]);
+	return status == 0;
+};
+
+// ================================================================
+// Texture management + blit
+// ================================================================
+
+export @symbol("shim_gl_create_texture_rgb") fn shim_gl_create_texture_rgb(
+	data: *u8, w: i32, h: i32) u32;
+export @symbol("shim_gl_update_texture_rgb") fn shim_gl_update_texture_rgb(
+	tex: u32, data: *u8, w: i32, h: i32) void;
+export @symbol("shim_gl_delete_texture") fn shim_gl_delete_texture(tex: u32) void;
+export @symbol("shim_gl_init_blit_shader") fn shim_gl_init_blit_shader(
+	blit_vs: *u8, blit_fs: *u8) i32;
+export @symbol("shim_gl_draw_textured_quad") fn shim_gl_draw_textured_quad(
+	tex: u32, x: f32, y: f32, w: f32, h: f32,
+	screen_w: i32, screen_h: i32) void;
+
+// ================================================================
+// Shared constants (used by engine.pka Scene as well)
+// ================================================================
+
+export def REND_MAX_INSTANCES: size = 128z;
+export def REND_MAX_LINE_VERTS: size = 1024z;
+
+// ================================================================
+// Render instance: a mesh + transform + color
+// ================================================================
+
+export type RenderInstance = struct {
+	mesh: *Mesh,
+	model: Mat4,
+	color: Color,
+	mat: Material,
+};
+
+// ================================================================
+// Light
+// ================================================================
+
+export type Light = struct {
+	position: Vec3,
+	direction: Vec3,
+	color: Color,
+	directional: bool,
+};
+
+export fn light_directional(dir: Vec3, col: Color) Light = {
+	return Light {
+		position = vec3_zero(),
+		direction = vec3_normalize(dir),
+		color = col,
+		directional = true
+	};
+};
+
+export fn light_point(pos: Vec3, col: Color) Light = {
+	return Light {
+		position = pos,
+		direction = vec3_zero(),
+		color = col,
+		directional = false
+	};
+};
+
+// ================================================================
+// GPU-accelerated 3D rendering (all modes)
+// ================================================================
+
+export type LineVertex3D = struct {
+	pos: Vec3,
+	color: Color,
+	thickness: f32,
+};
+
+def ENV_PACK_SIZE: size = 16z;
+
+// Render mesh instances using GPU shaders
+export fn render_instances(instances: *[REND_MAX_INSTANCES]RenderInstance,
+                           count: i32, mvp_base: *Mat4,
+                           light: Light, cam_eye: Vec3,
+                           env: *IrradianceEnv) void = {
+	// Pack environment into float array for shim
+	let env_data: [ENV_PACK_SIZE]f32 = [0.0...];
+	env_data[0z] = env.sky_color.r;
+	env_data[1z] = env.sky_color.g;
+	env_data[2z] = env.sky_color.b;
+	env_data[3z] = env.ground_color.r;
+	env_data[4z] = env.ground_color.g;
+	env_data[5z] = env.ground_color.b;
+	env_data[6z] = env.horizon_color.r;
+	env_data[7z] = env.horizon_color.g;
+	env_data[8z] = env.horizon_color.b;
+	env_data[9z] = env.specular_color.r;
+	env_data[10z] = env.specular_color.g;
+	env_data[11z] = env.specular_color.b;
+	env_data[12z] = env.intensity;
+
+	let inst_i: i32 = 0;
+	for (inst_i < count) {
+		let sidx: size = inst_i: size;
+		let inst = &instances[sidx];
+		let full_mvp = mat4_mul(mvp_base, &inst.model);
+		let mesh = inst.mesh;
+
+		if (inst.mat.shading == SHADE_PBR) {
+			let eye = cam_eye;
+			shim_gl_begin_pbr(&full_mvp.d[0z], &inst.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				eye.x, eye.y, eye.z,
+				inst.mat.albedo.r, inst.mat.albedo.g, inst.mat.albedo.b,
+				inst.mat.metallic, inst.mat.roughness,
+				&env_data[0z], inst.mat.albedo.a);
+		} else {
+			shim_gl_begin_flat(&full_mvp.d[0z], &inst.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				inst.color.r, inst.color.g, inst.color.b, inst.color.a);
+		};
+
+		shim_gl_draw_mesh(&mesh.verts[0z], mesh.vert_count * VERT_STRIDE,
+			&mesh.indices[0z], mesh.index_count);
+
+		inst_i = inst_i + 1;
+	};
+};
+
+// Render lines using GPU
+export fn render_lines(verts: *[REND_MAX_LINE_VERTS]LineVertex3D,
+                       count: i32, mvp: *Mat4) void = {
+	let i: i32 = 0;
+	for (i + 1 < count) {
+		let v0 = &verts[i: size];
+		let v1 = &verts[(i + 1): size];
+		let seg: [14]f32 = [
+			v0.pos.x, v0.pos.y, v0.pos.z,
+			v0.color.r, v0.color.g, v0.color.b, v0.color.a,
+			v1.pos.x, v1.pos.y, v1.pos.z,
+			v1.color.r, v1.color.g, v1.color.b, v1.color.a
+		];
+		let w = v0.thickness;
+		if (w < 1.0) { w = 1.0; };
+		shim_gl_draw_line_segment(&seg[0z], &mvp.d[0z], w);
+		i = i + 2;
+	};
+};
+
+// Convenience: create FBO, render, read back pixels, destroy FBO
+export fn render_to_fb(fb: *Framebuffer, instances: *[REND_MAX_INSTANCES]RenderInstance,
+                       count: i32, mvp: *Mat4, light: Light, cam_eye: Vec3,
+                       env: *IrradianceEnv) void = {
+	shim_gl_fbo_create(fb.width, fb.height);
+	shim_gl_fbo_bind();
+	let bg_r: f32 = 0.0;
+	let bg_g: f32 = 0.0;
+	let bg_b: f32 = 0.0;
+	shim_gl_clear(bg_r, bg_g, bg_b, 1.0);
+	shim_gl_enable_depth();
+	shim_gl_enable_blend();
+	shim_gl_viewport(0, 0, fb.width, fb.height);
+	render_instances(instances, count, mvp, light, cam_eye, env);
+	shim_gl_disable_blend();
+	shim_gl_fbo_read_pixels_flipped(&fb.pixels[0z], fb.width, fb.height);
+	shim_gl_fbo_unbind();
+	shim_gl_fbo_destroy();
+};
+
+// ================================================================
+// Depth rendering
+// ================================================================
+
+export @symbol("shim_gl_begin_depth") fn shim_gl_begin_depth(
+	mvp: *f32, znear: f32, zfar: f32) void;
+export @symbol("shim_gl_fbo_read_depth_encoded") fn shim_gl_fbo_read_depth_encoded(
+	out: *f32, w: i32, h: i32, znear: f32, zfar: f32) void;
+
+// Render mesh instances using depth shader only (no color, no lighting)
+export fn render_instances_depth(instances: *[REND_MAX_INSTANCES]RenderInstance,
+                                  count: i32, mvp_base: *Mat4,
+                                  znear: f32, zfar: f32) void = {
+	let di: i32 = 0;
+	for (di < count) {
+		let sidx: size = di: size;
+		let inst = &instances[sidx];
+		let full_mvp = mat4_mul(mvp_base, &inst.model);
+		let mesh = inst.mesh;
+
+		shim_gl_begin_depth(&full_mvp.d[0z], znear, zfar);
+		shim_gl_draw_mesh(&mesh.verts[0z], mesh.vert_count * VERT_STRIDE,
+			&mesh.indices[0z], mesh.index_count);
+
+		di = di + 1;
+	};
+};
+
+// Convenience: create FBO, render color + depth, read back, destroy FBO
+export fn render_to_fb_with_depth(fb: *Framebuffer,
+    instances: *[REND_MAX_INSTANCES]RenderInstance, count: i32,
+    mvp: *Mat4, light: Light, cam_eye: Vec3,
+    env: *IrradianceEnv, znear: f32, zfar: f32) void = {
+	// Color pass
+	shim_gl_fbo_create(fb.width, fb.height);
+	shim_gl_fbo_bind();
+	shim_gl_clear(0.0, 0.0, 0.0, 1.0);
+	shim_gl_enable_depth();
+	shim_gl_enable_blend();
+	shim_gl_viewport(0, 0, fb.width, fb.height);
+	render_instances(instances, count, mvp, light, cam_eye, env);
+	shim_gl_disable_blend();
+	shim_gl_fbo_read_pixels_flipped(&fb.pixels[0z], fb.width, fb.height);
+	shim_gl_fbo_unbind();
+	shim_gl_fbo_destroy();
+
+	// Depth pass
+	shim_gl_fbo_create(fb.width, fb.height);
+	shim_gl_fbo_bind();
+	shim_gl_clear(0.0, 0.0, 0.0, 1.0);
+	shim_gl_enable_depth();
+	shim_gl_viewport(0, 0, fb.width, fb.height);
+	render_instances_depth(instances, count, mvp, znear, zfar);
+	shim_gl_fbo_read_depth_encoded(&fb.depth[0z], fb.width, fb.height, znear, zfar);
+	shim_gl_fbo_unbind();
+	shim_gl_fbo_destroy();
+	fb.has_depth = true;
+};
+
+// Render a full rig (all cameras) to an array of framebuffers
+export fn render_rig(fbs: *[4]Framebuffer, rig: *CameraRig,
+                     scene_instances: *[REND_MAX_INSTANCES]RenderInstance,
+                     inst_count: i32, light: Light,
+                     env: *IrradianceEnv, with_depth: bool) void = {
+	let ri: i32 = 0;
+	for (ri < rig.count) {
+		let ridx: size = ri: size;
+		let cam = &rig.cameras[ridx];
+		let fb = &fbs[ridx];
+		let aspect = (fb.width: f32) / (fb.height: f32);
+		let vp = freecam_view_projection(cam, aspect);
+		let eye = cam.eye;
+
+		if (with_depth) {
+			render_to_fb_with_depth(fb, scene_instances, inst_count,
+				&vp, light, eye, env, cam.znear, cam.zfar);
+		} else {
+			render_to_fb(fb, scene_instances, inst_count,
+				&vp, light, eye, env);
+		};
+
+		ri = ri + 1;
+	};
+};
+
+// Convenience: render instances + lines to FB (used by tests)
+export fn render_to_fb_full(fb: *Framebuffer, instances: *[REND_MAX_INSTANCES]RenderInstance,
+                            inst_count: i32, line_verts: *[REND_MAX_LINE_VERTS]LineVertex3D,
+                            line_count: i32, mvp: *Mat4, light: Light, cam_eye: Vec3,
+                            env: *IrradianceEnv) void = {
+	shim_gl_fbo_create(fb.width, fb.height);
+	shim_gl_fbo_bind();
+	shim_gl_clear(0.0, 0.0, 0.0, 1.0);
+	shim_gl_enable_depth();
+	shim_gl_enable_blend();
+	shim_gl_viewport(0, 0, fb.width, fb.height);
+	render_instances(instances, inst_count, mvp, light, cam_eye, env);
+	shim_gl_disable_blend();
+	if (line_count > 0) {
+		render_lines(line_verts, line_count, mvp);
+	};
+	shim_gl_fbo_read_pixels_flipped(&fb.pixels[0z], fb.width, fb.height);
+	shim_gl_fbo_unbind();
+	shim_gl_fbo_destroy();
+};

@@ -1,0 +1,223 @@
+// test_texture2d.pka — Tests for 2D texture rendering and camera view overlay.
+// Verifies:
+//   1. GPU texture create + update from RGB data
+//   2. Textured quad rendering produces visible pixels
+//   3. CameraView renders scene and draws overlay
+//   4. Depth visualization mode produces grayscale output
+
+use fmt;
+
+export fn main() void = {
+	fmt::Printsln("=== test_texture2d ===");
+
+	// --- Setup: load model, init headless engine, create scene ---
+	let path: [20]u8 = ['m', 'o', 'd', 'e', 'l', 's', '/', 'b', 'a', 'l', 'l', '.', 'x', 'm', 'l', 0, 0, 0, 0, 0];
+	let rc = mj_shim_load(&path[0z]);
+	assert(rc == 0, "model load");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 128, 96);
+	assert(e2_runtime_start(&rt), "engine start");
+	assert(e2_init_blit_shader(), "blit shader init");
+
+	let sc = scene_new();
+	scene_init(&sc);
+	scene_update(&sc);
+
+	let geom_pass = util_geom_pass_init();
+	scene_geom_pass(&sc, &geom_pass);
+
+	let lights = util_light_buffer_init();
+	let env = env_default();
+
+	let tbuf: [256]u8 = [0...];
+	let tf = fmt::New(tbuf[0z..256z]);
+
+	// ========== Test 1: Create texture from synthetic pattern ==========
+	// Red/blue checkerboard 8x8
+	let pattern: [192]u8 = [0...];
+	for (let py: i32 = 0; py < 8; py += 1) {
+		for (let px: i32 = 0; px < 8; px += 1) {
+			let pi: size = ((py * 8 + px) * 3): size;
+			if ((px + py) % 2 == 0) {
+				pattern[pi] = 255u8;       // R
+				pattern[pi + 1z] = 0u8;    // G
+				pattern[pi + 2z] = 0u8;    // B
+			} else {
+				pattern[pi] = 0u8;
+				pattern[pi + 1z] = 0u8;
+				pattern[pi + 2z] = 255u8;
+			};
+		};
+	};
+
+	let tex = e2_gpu_texture_create_rgb(pattern[0z..192z], 8, 8);
+	assert(tex.valid, "texture created");
+	assert(tex.width == 8, "tex width");
+	assert(tex.height == 8, "tex height");
+	fmt::Printsln("  test_texture_create: OK");
+
+	// ========== Test 2: Draw texture to framebuffer, verify pixels ==========
+	// Render a 3D scene first, then overlay the texture
+	let cam = freecam_new(
+		vec3_new(0.0, -3.0, 2.0),
+		vec3_new(0.0, 0.0, 1.0),
+		60.0, 0.1, 20.0);
+
+	e2_pass_begin(&rt, color_new(0.05, 0.05, 0.08, 1.0));
+	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_PBR,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		util_light_buffer_slice(&lights), &env);
+
+	// Draw textured quad at top-left corner, 32x32 pixels
+	e2_pass_2d_texture(&rt, &tex, 0, 0, 32, 32);
+	e2_pass_end(&rt);
+
+	// Check pixels in the overlay region
+	// Top-left corner should have colored pixels from the texture
+	let overlay_r: i32 = 0;
+	let overlay_b: i32 = 0;
+	for (let cy: i32 = 0; cy < 32; cy += 1) {
+		for (let cx: i32 = 0; cx < 32; cx += 1) {
+			let idx: size = ((cy * 128 + cx) * 3): size;
+			let rv: i32 = rt.fb.pixels[idx]: i32;
+			let bv: i32 = rt.fb.pixels[idx + 2z]: i32;
+			if (rv > 100) { overlay_r = overlay_r + 1; };
+			if (bv > 100) { overlay_b = overlay_b + 1; };
+		};
+	};
+
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  overlay: red=");
+	fmt::Wi64(&tf, overlay_r: i64);
+	fmt::Write(&tf, " blue=");
+	fmt::Wi64(&tf, overlay_b: i64);
+	fmt::Println(&tf);
+
+	assert(overlay_r > 50, "overlay has red pixels");
+	assert(overlay_b > 50, "overlay has blue pixels");
+	fmt::Printsln("  test_texture_draw: OK");
+
+	// ========== Test 3: Update texture with new data ==========
+	// Fill with solid green
+	let green: [192]u8 = [0...];
+	for (let gi: i32 = 0; gi < 64; gi += 1) {
+		let gidx: size = (gi * 3): size;
+		green[gidx] = 0u8;
+		green[gidx + 1z] = 255u8;
+		green[gidx + 2z] = 0u8;
+	};
+	e2_gpu_texture_update_rgb(&tex, green[0z..192z]);
+
+	e2_pass_begin(&rt, color_new(0.0, 0.0, 0.0, 1.0));
+	e2_pass_2d_texture(&rt, &tex, 0, 0, 32, 32);
+	e2_pass_end(&rt);
+
+	let green_count: i32 = 0;
+	for (let gy: i32 = 2; gy < 30; gy += 1) {
+		for (let gx: i32 = 2; gx < 30; gx += 1) {
+			let gpi: size = ((gy * 128 + gx) * 3): size;
+			let gv: i32 = rt.fb.pixels[gpi + 1z]: i32;
+			if (gv > 100) { green_count = green_count + 1; };
+		};
+	};
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  update green=");
+	fmt::Wi64(&tf, green_count: i64);
+	fmt::Println(&tf);
+
+	assert(green_count > 100, "updated texture has green pixels");
+	fmt::Printsln("  test_texture_update: OK");
+
+	// Cleanup texture
+	e2_gpu_texture_destroy(&tex);
+	assert(!tex.valid, "texture destroyed");
+
+	// ========== Test 4: CameraView RGB mode ==========
+	let cv_rgb = camera_view_new(
+		vec3_new(0.0, -3.0, 2.0),
+		vec3_new(0.0, 0.0, 1.0),
+		60.0, 0.1, 20.0,
+		64, 48,
+		0, 0, 64, 48,
+		CAMVIEW_MODE_RGB);
+
+	scene_geom_pass(&sc, &geom_pass);
+	let draws_rgb = geom_pass.draws[0z..(geom_pass.count: size)];
+	let cv_ok = camera_view_render(&cv_rgb, draws_rgb,
+		util_light_buffer_slice(&lights), &env);
+	assert(cv_ok, "camera view render ok");
+	assert(cv_rgb.initialized, "camera view initialized");
+	assert(cv_rgb.texture.valid, "camera view texture valid");
+
+	// Draw to framebuffer
+	e2_pass_begin(&rt, color_new(0.0, 0.0, 0.0, 1.0));
+	camera_view_draw(&cv_rgb, &rt);
+	e2_pass_end(&rt);
+
+	// Check that the overlay region has non-black pixels
+	let cv_nonblack: i32 = 0;
+	for (let vy: i32 = 0; vy < 48; vy += 1) {
+		for (let vx: i32 = 0; vx < 64; vx += 1) {
+			let vi: size = ((vy * 128 + vx) * 3): size;
+			let vr: i32 = rt.fb.pixels[vi]: i32;
+			let vg: i32 = rt.fb.pixels[vi + 1z]: i32;
+			let vb: i32 = rt.fb.pixels[vi + 2z]: i32;
+			if (vr > 10 || vg > 10 || vb > 10) {
+				cv_nonblack = cv_nonblack + 1;
+			};
+		};
+	};
+
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  camera_view rgb nonblack=");
+	fmt::Wi64(&tf, cv_nonblack: i64);
+	fmt::Println(&tf);
+
+	assert(cv_nonblack > 50, "camera view shows rendered scene");
+	fmt::Printsln("  test_camera_view_rgb: OK");
+
+	// ========== Test 5: CameraView depth mode ==========
+	let cv_depth = camera_view_new(
+		vec3_new(0.0, -3.0, 2.0),
+		vec3_new(0.0, 0.0, 1.0),
+		60.0, 0.1, 20.0,
+		64, 48,
+		64, 0, 64, 48,
+		CAMVIEW_MODE_DEPTH);
+
+	scene_geom_pass(&sc, &geom_pass);
+	let draws_depth = geom_pass.draws[0z..(geom_pass.count: size)];
+	let cd_ok = camera_view_render(&cv_depth, draws_depth,
+		util_light_buffer_slice(&lights), &env);
+	assert(cd_ok, "depth view render ok");
+
+	// Draw depth view at full size
+	e2_pass_begin(&rt, color_new(0.0, 0.0, 0.0, 1.0));
+	e2_pass_2d_texture(&rt, &cv_depth.texture, 0, 0, 128, 96);
+	e2_pass_end(&rt);
+
+	// Check framebuffer for bright pixels from depth visualization
+	let depth_bright: i32 = 0;
+	let fb_total: i32 = 128 * 96;
+	for (let dpi: i32 = 0; dpi < fb_total; dpi += 1) {
+		let di: size = (dpi * 3): size;
+		let dr: i32 = rt.fb.pixels[di]: i32;
+		if (dr > 5) { depth_bright = depth_bright + 1; };
+	};
+
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  camera_view depth bright=");
+	fmt::Wi64(&tf, depth_bright: i64);
+	fmt::Println(&tf);
+
+	assert(depth_bright > 20, "depth view has bright pixels");
+	fmt::Printsln("  test_camera_view_depth: OK");
+
+	// --- Cleanup ---
+	camera_view_destroy(&cv_rgb);
+	camera_view_destroy(&cv_depth);
+	scene_destroy(&sc);
+	mj_shim_free();
+	e2_runtime_shutdown(&rt);
+	fmt::Printsln("=== test_texture2d passed ===");
+};

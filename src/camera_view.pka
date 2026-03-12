@@ -1,0 +1,131 @@
+// camera_view.pka — 2D camera feed visualization for trellis2.
+// Wraps a DepthSensor and a GPU texture to display camera RGB/depth
+// as a 2D overlay on the main viewport.
+
+use fmt;
+
+export def CAMVIEW_MAX_W: i32 = 128;
+export def CAMVIEW_MAX_H: i32 = 96;
+def CAMVIEW_MAX_PIXELS: size = 12288z;  // 128 * 96
+def CAMVIEW_MAX_RGB: size = 36864z;     // 128 * 96 * 3
+
+export def CAMVIEW_MODE_RGB: i32 = 0;
+export def CAMVIEW_MODE_DEPTH: i32 = 1;
+
+export type CameraView = struct {
+	sensor: DepthSensor,
+	texture: E2GpuTexture,
+	display_buf: [CAMVIEW_MAX_RGB]u8,
+	mode: i32,
+	screen_x: i32,
+	screen_y: i32,
+	screen_w: i32,
+	screen_h: i32,
+	initialized: bool,
+};
+
+// Create a camera view with sensor parameters and screen placement.
+export fn camera_view_new(
+	eye: Vec3, target: Vec3,
+	fov: f32, znear: f32, zfar: f32,
+	sensor_w: i32, sensor_h: i32,
+	screen_x: i32, screen_y: i32,
+	screen_w: i32, screen_h: i32,
+	mode: i32) CameraView = {
+	let sensor = depth_sensor_new(eye, target, fov, znear, zfar,
+		sensor_w, sensor_h);
+	return CameraView {
+		sensor = sensor,
+		texture = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false },
+		display_buf = [0...],
+		mode = mode,
+		screen_x = screen_x,
+		screen_y = screen_y,
+		screen_w = screen_w,
+		screen_h = screen_h,
+		initialized = false,
+	};
+};
+
+// Convert depth buffer to grayscale RGB for visualization.
+// Maps [znear, max_vis_depth] → [255 (white/near), 0 (black/far)].
+fn depth_to_rgb(depth: []f32, out: []u8, w: i32, h: i32,
+	znear: f32, max_depth: f32) void = {
+	let npix = w * h;
+	let range = max_depth - znear;
+	if (range < 0.001) { range = 1.0; };
+	for (let i: i32 = 0; i < npix; i += 1) {
+		let d = depth[i: size];
+		let val: u8 = 0u8;
+		if (d > 0.001 && d < max_depth) {
+			let norm = 1.0 - ((d - znear) / range);
+			if (norm < 0.0) { norm = 0.0; };
+			if (norm > 1.0) { norm = 1.0; };
+			val = (norm * 255.0): u8;
+		};
+		let idx: size = (i * 3): size;
+		out[idx] = val;
+		out[idx + 1z] = val;
+		out[idx + 2z] = val;
+	};
+};
+
+// Render scene from sensor viewpoint and update the GPU texture.
+export fn camera_view_render(view: *CameraView,
+	geom_draws: []E2GeomDraw, lights: []Light,
+	env: *IrradianceEnv) bool = {
+	let ok = depth_sensor_render(&view.sensor, geom_draws, lights, env);
+	if (!ok) { return false; };
+
+	let npix: size = (view.sensor.width * view.sensor.height): size;
+	let nrgb: size = npix * 3z;
+
+	if (view.mode == CAMVIEW_MODE_DEPTH) {
+		depth_to_rgb(
+			view.sensor.depth[0z..npix],
+			view.display_buf[0z..nrgb],
+			view.sensor.width, view.sensor.height,
+			view.sensor.cam.znear, view.sensor.cam.zfar);
+	} else {
+		// Copy RGB data
+		for (let ci: size = 0z; ci < nrgb; ci += 1z) {
+			view.display_buf[ci] = view.sensor.rgb[ci];
+		};
+	};
+
+	if (!view.initialized) {
+		view.texture = e2_gpu_texture_create_rgb(
+			view.display_buf[0z..nrgb],
+			view.sensor.width, view.sensor.height);
+		view.initialized = true;
+	} else {
+		e2_gpu_texture_update_rgb(&view.texture,
+			view.display_buf[0z..nrgb]);
+	};
+	return true;
+};
+
+// Draw the camera feed as a 2D overlay on the current render target.
+export fn camera_view_draw(view: *CameraView, rt: *E2Runtime) void = {
+	if (!view.initialized || !view.texture.valid) { return; };
+	e2_pass_2d_texture(rt, &view.texture,
+		view.screen_x, view.screen_y,
+		view.screen_w, view.screen_h);
+};
+
+// Update the sensor's camera pose.
+export fn camera_view_set_pose(view: *CameraView,
+	eye: Vec3, target: Vec3) void = {
+	view.sensor.cam = freecam_new(eye, target,
+		view.sensor.cam.fov,
+		view.sensor.cam.znear,
+		view.sensor.cam.zfar);
+};
+
+// Cleanup GPU resources.
+export fn camera_view_destroy(view: *CameraView) void = {
+	if (view.initialized) {
+		e2_gpu_texture_destroy(&view.texture);
+		view.initialized = false;
+	};
+};

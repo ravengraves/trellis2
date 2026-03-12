@@ -1,0 +1,192 @@
+// input.pka — Input event processing for Pollyn Engine
+// Reads events from the C shim ring buffer.
+
+// Event types — must match C shim enum
+export def EVT_NONE: i32          = 0;
+export def EVT_KEY_PRESS: i32     = 1;
+export def EVT_KEY_RELEASE: i32   = 2;
+export def EVT_CHAR: i32          = 3;
+export def EVT_MOUSE_PRESS: i32   = 4;
+export def EVT_MOUSE_RELEASE: i32 = 5;
+export def EVT_CURSOR_MOVE: i32   = 6;
+export def EVT_SCROLL: i32        = 7;
+export def EVT_RESIZE: i32        = 8;
+export def EVT_CLOSE: i32         = 9;
+
+// Key codes (GLFW-compatible)
+export def KEY_SPACE: i32   = 32;
+export def KEY_ESCAPE: i32  = 256;
+export def KEY_ENTER: i32   = 257;
+export def KEY_RIGHT: i32   = 262;
+export def KEY_LEFT: i32    = 263;
+export def KEY_DOWN: i32    = 264;
+export def KEY_UP: i32      = 265;
+export def KEY_PAGE_UP: i32 = 266;
+export def KEY_PAGE_DOWN: i32 = 267;
+export def KEY_CTRL_C: i32  = 1000;
+
+export def KEY_A: i32 = 65;
+export def KEY_B: i32 = 66;
+export def KEY_D: i32 = 68;
+export def KEY_Q: i32 = 81;
+export def KEY_R: i32 = 82;
+export def KEY_S: i32 = 83;
+export def KEY_W: i32 = 87;
+
+// Mouse buttons
+export def MOUSE_LEFT: i32   = 0;
+export def MOUSE_RIGHT: i32  = 1;
+export def MOUSE_MIDDLE: i32 = 2;
+
+// C shim functions
+export @symbol("shim_event_poll") fn shim_event_poll(
+	out_key: *i32, out_mods: *i32, out_x: *f32, out_y: *f32) i32;
+export @symbol("shim_event_clear") fn shim_event_clear() void;
+export @symbol("shim_term_poll_input") fn shim_term_poll_input() void;
+
+// Processed event
+export type InputEvent = struct {
+	etype: i32,
+	key: i32,
+	mods: i32,
+	x: f32,
+	y: f32,
+};
+
+// Input state tracks mouse, keys
+def MAX_EVENTS: size = 64z;
+
+export type InputState = struct {
+	events: [MAX_EVENTS]InputEvent,
+	event_count: i32,
+	mouse_x: f32,
+	mouse_y: f32,
+	mouse_dx: f32,
+	mouse_dy: f32,
+	scroll_x: f32,
+	scroll_y: f32,
+	mouse_left: bool,
+	mouse_right: bool,
+	mouse_middle: bool,
+	should_close: bool,
+	win_width: i32,
+	win_height: i32,
+	terminal_mode: bool,
+	// Key state: track up to 32 pressed keys
+	keys_pressed: [512]bool,
+};
+
+export fn input_init(terminal: bool) InputState = {
+	return InputState {
+		events = [InputEvent { etype = 0, key = 0, mods = 0, x = 0.0, y = 0.0 }...],
+		event_count = 0,
+		mouse_x = 0.0, mouse_y = 0.0,
+		mouse_dx = 0.0, mouse_dy = 0.0,
+		scroll_x = 0.0, scroll_y = 0.0,
+		mouse_left = false, mouse_right = false, mouse_middle = false,
+		should_close = false,
+		win_width = 800, win_height = 600,
+		terminal_mode = terminal,
+		keys_pressed = [false...]
+	};
+};
+
+// Poll all events from the C ring buffer into our state
+export fn input_poll(state: *InputState) void = {
+	state.mouse_dx = 0.0;
+	state.mouse_dy = 0.0;
+	state.scroll_x = 0.0;
+	state.scroll_y = 0.0;
+	state.event_count = 0;
+	if (state.terminal_mode) {
+		for (let i: i32 = 0; i < 512; i += 1) {
+			state.keys_pressed[i: size] = false;
+		};
+	};
+
+	if (state.terminal_mode) {
+		shim_term_poll_input();
+	};
+
+	let ev_key: i32 = 0;
+	let ev_mods: i32 = 0;
+	let ev_x: f32 = 0.0;
+	let ev_y: f32 = 0.0;
+
+	for (true) {
+		let etype = shim_event_poll(&ev_key, &ev_mods, &ev_x, &ev_y);
+		if (etype == EVT_NONE) { break; };
+
+		// Store event
+		if (state.event_count < (MAX_EVENTS: i32)) {
+			state.events[state.event_count: size] = InputEvent {
+				etype = etype, key = ev_key, mods = ev_mods,
+				x = ev_x, y = ev_y
+			};
+			state.event_count = state.event_count + 1;
+		};
+
+		// Update state
+		if (etype == EVT_KEY_PRESS) {
+			if (ev_key >= 0 && ev_key < 512) {
+				state.keys_pressed[ev_key: size] = true;
+			};
+			if (ev_key == KEY_ESCAPE || ev_key == KEY_CTRL_C) {
+				state.should_close = true;
+			};
+		} else if (etype == EVT_KEY_RELEASE) {
+			if (ev_key >= 0 && ev_key < 512) {
+				state.keys_pressed[ev_key: size] = false;
+			};
+		} else if (etype == EVT_MOUSE_PRESS) {
+			if (ev_key == MOUSE_LEFT)   { state.mouse_left = true; };
+			if (ev_key == MOUSE_RIGHT)  { state.mouse_right = true; };
+			if (ev_key == MOUSE_MIDDLE) { state.mouse_middle = true; };
+			// Ignore the click-frame cursor jump so click-to-focus does not
+			// apply a large one-frame orbit/pan delta in terminal mode.
+			state.mouse_dx = 0.0;
+			state.mouse_dy = 0.0;
+		} else if (etype == EVT_MOUSE_RELEASE) {
+			if (ev_key == MOUSE_LEFT)   { state.mouse_left = false; };
+			if (ev_key == MOUSE_RIGHT)  { state.mouse_right = false; };
+			if (ev_key == MOUSE_MIDDLE) { state.mouse_middle = false; };
+		} else if (etype == EVT_CURSOR_MOVE) {
+			state.mouse_dx = state.mouse_dx + (ev_x - state.mouse_x);
+			state.mouse_dy = state.mouse_dy + (ev_y - state.mouse_y);
+			state.mouse_x = ev_x;
+			state.mouse_y = ev_y;
+		} else if (etype == EVT_SCROLL) {
+			state.scroll_x = state.scroll_x + ev_x;
+			state.scroll_y = state.scroll_y + ev_y;
+		} else if (etype == EVT_RESIZE) {
+			state.win_width = ev_x: i32;
+			state.win_height = ev_y: i32;
+		} else if (etype == EVT_CLOSE) {
+			state.should_close = true;
+		};
+	};
+};
+
+export fn input_key_pressed(state: *InputState, key: i32) bool = {
+	if (key < 0 || key >= 512) { return false; };
+	return state.keys_pressed[key: size];
+};
+
+// Count key press events queued this frame.
+// Useful for backends (like terminal raw input) that do not emit key-release.
+export fn input_key_press_count(state: *InputState, key: i32) i32 = {
+	if (key < 0 || key >= 512) { return 0; };
+	let count: i32 = 0;
+	for (let i: i32 = 0; i < state.event_count; i += 1) {
+		if (state.events[i: size].etype == EVT_KEY_PRESS &&
+		    state.events[i: size].key == key) {
+			count = count + 1;
+		};
+	};
+	return count;
+};
+
+// Check if a key was just pressed this frame
+export fn input_key_just_pressed(state: *InputState, key: i32) bool = {
+	return input_key_press_count(state, key) > 0;
+};

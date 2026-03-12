@@ -1,0 +1,332 @@
+// mesh.pka — Mesh primitive generation for Pollyn Engine
+// Generates vertex (position+normal) and index arrays for common shapes.
+
+use math;
+
+// Vertex: 8 floats (px, py, pz, nx, ny, nz, u, v)
+def VERT_STRIDE: i32 = 8;
+
+// Max mesh sizes (stack-allocated)
+def MAX_VERTS: size = 4096z;
+def MAX_FLOATS: size = 32768z; // MAX_VERTS * 8
+def MAX_INDICES: size = 24576z;
+
+export type Mesh = struct {
+	verts: [MAX_FLOATS]f32,
+	indices: [MAX_INDICES]u16,
+	vert_count: i32,
+	index_count: i32,
+};
+
+export fn mesh_init() Mesh = {
+	return Mesh {
+		verts = [0.0...],
+		indices = [0...],
+		vert_count = 0,
+		index_count = 0
+	};
+};
+
+// Build a mesh from user-provided interleaved vertex/index buffers.
+// Vertex layout must be [px, py, pz, nx, ny, nz] with stride 6 floats.
+export fn mesh_from_buffers(vertex_data: []f32, index_data: []u16) Mesh = {
+	let m = mesh_init();
+
+	let stride: size = VERT_STRIDE: size;
+	let vert_floats = vertex_data.len;
+	if (vert_floats > MAX_FLOATS) {
+		vert_floats = MAX_FLOATS;
+	};
+	vert_floats = (vert_floats / stride) * stride;
+
+	let vc: i32 = (vert_floats / stride): i32;
+	let ic_max = index_data.len;
+	if (ic_max > MAX_INDICES) {
+		ic_max = MAX_INDICES;
+	};
+
+	for (let i: size = 0z; i < vert_floats; i += 1z) {
+		m.verts[i] = vertex_data[i];
+	};
+	m.vert_count = vc;
+
+	let ic: i32 = 0;
+	for (let i: size = 0z; i < ic_max; i += 1z) {
+		let idx = index_data[i]: i32;
+		if (idx >= 0 && idx < vc) {
+			m.indices[ic: size] = index_data[i];
+			ic = ic + 1;
+		};
+	};
+	m.index_count = ic;
+
+	return m;
+};
+
+// Uniform index decimation that keeps all vertices but subsamples triangles.
+export fn mesh_decimate(src: *Mesh, target_triangles: i32) Mesh = {
+	let out = mesh_init();
+	if (src.vert_count <= 0 || src.index_count < 3 || target_triangles <= 0) {
+		return out;
+	};
+
+	let src_tri = src.index_count / 3;
+	let src_vert_floats: size = (src.vert_count * VERT_STRIDE): size;
+	for (let i: size = 0z; i < src_vert_floats; i += 1z) {
+		out.verts[i] = src.verts[i];
+	};
+	out.vert_count = src.vert_count;
+
+	if (target_triangles >= src_tri) {
+		for (let i: i32 = 0; i < src.index_count; i += 1) {
+			out.indices[i: size] = src.indices[i: size];
+		};
+		out.index_count = src.index_count;
+		return out;
+	};
+
+	let step = (src_tri + target_triangles - 1) / target_triangles;
+	for (let tri: i32 = 0; tri < src_tri && out.index_count + 2 < MAX_INDICES: i32; tri += step) {
+		let ib: size = (tri * 3): size;
+		out.indices[out.index_count: size] = src.indices[ib];
+		out.indices[(out.index_count + 1): size] = src.indices[ib + 1z];
+		out.indices[(out.index_count + 2): size] = src.indices[ib + 2z];
+		out.index_count = out.index_count + 3;
+	};
+
+	return out;
+};
+
+fn mesh_add_vert(m: *Mesh, px: f32, py: f32, pz: f32,
+	nx: f32, ny: f32, nz: f32, u: f32, v: f32) void = {
+	let base: size = (m.vert_count * VERT_STRIDE): size;
+	if (base + 7z >= MAX_FLOATS) { return; };
+	m.verts[base]      = px;
+	m.verts[base + 1z] = py;
+	m.verts[base + 2z] = pz;
+	m.verts[base + 3z] = nx;
+	m.verts[base + 4z] = ny;
+	m.verts[base + 5z] = nz;
+	m.verts[base + 6z] = u;
+	m.verts[base + 7z] = v;
+	m.vert_count = m.vert_count + 1;
+};
+
+fn mesh_add_tri(m: *Mesh, a: u16, b: u16, c: u16) void = {
+	let idx: size = m.index_count: size;
+	if (idx + 2z >= MAX_INDICES) { return; };
+	m.indices[idx]      = a;
+	m.indices[idx + 1z] = b;
+	m.indices[idx + 2z] = c;
+	m.index_count = m.index_count + 3;
+};
+
+// ================================================================
+// BOX: unit cube [-0.5, 0.5]^3 with face normals
+// ================================================================
+
+export fn mesh_create_box() Mesh = {
+	let m = mesh_init();
+	// 6 faces * 4 verts = 24 verts, 6 faces * 2 tris = 12 tris
+	// Each face gets 0..1 UV mapping
+	// +Z face
+	mesh_add_vert(&m, -0.5, -0.5,  0.5,  0.0,  0.0,  1.0, 0.0, 0.0);
+	mesh_add_vert(&m,  0.5, -0.5,  0.5,  0.0,  0.0,  1.0, 1.0, 0.0);
+	mesh_add_vert(&m,  0.5,  0.5,  0.5,  0.0,  0.0,  1.0, 1.0, 1.0);
+	mesh_add_vert(&m, -0.5,  0.5,  0.5,  0.0,  0.0,  1.0, 0.0, 1.0);
+	mesh_add_tri(&m, 0, 1, 2); mesh_add_tri(&m, 0, 2, 3);
+	// -Z face
+	mesh_add_vert(&m,  0.5, -0.5, -0.5,  0.0,  0.0, -1.0, 0.0, 0.0);
+	mesh_add_vert(&m, -0.5, -0.5, -0.5,  0.0,  0.0, -1.0, 1.0, 0.0);
+	mesh_add_vert(&m, -0.5,  0.5, -0.5,  0.0,  0.0, -1.0, 1.0, 1.0);
+	mesh_add_vert(&m,  0.5,  0.5, -0.5,  0.0,  0.0, -1.0, 0.0, 1.0);
+	mesh_add_tri(&m, 4, 5, 6); mesh_add_tri(&m, 4, 6, 7);
+	// +X face
+	mesh_add_vert(&m,  0.5, -0.5,  0.5,  1.0,  0.0,  0.0, 0.0, 0.0);
+	mesh_add_vert(&m,  0.5, -0.5, -0.5,  1.0,  0.0,  0.0, 1.0, 0.0);
+	mesh_add_vert(&m,  0.5,  0.5, -0.5,  1.0,  0.0,  0.0, 1.0, 1.0);
+	mesh_add_vert(&m,  0.5,  0.5,  0.5,  1.0,  0.0,  0.0, 0.0, 1.0);
+	mesh_add_tri(&m, 8, 9, 10); mesh_add_tri(&m, 8, 10, 11);
+	// -X face
+	mesh_add_vert(&m, -0.5, -0.5, -0.5, -1.0,  0.0,  0.0, 0.0, 0.0);
+	mesh_add_vert(&m, -0.5, -0.5,  0.5, -1.0,  0.0,  0.0, 1.0, 0.0);
+	mesh_add_vert(&m, -0.5,  0.5,  0.5, -1.0,  0.0,  0.0, 1.0, 1.0);
+	mesh_add_vert(&m, -0.5,  0.5, -0.5, -1.0,  0.0,  0.0, 0.0, 1.0);
+	mesh_add_tri(&m, 12, 13, 14); mesh_add_tri(&m, 12, 14, 15);
+	// +Y face
+	mesh_add_vert(&m, -0.5,  0.5,  0.5,  0.0,  1.0,  0.0, 0.0, 0.0);
+	mesh_add_vert(&m,  0.5,  0.5,  0.5,  0.0,  1.0,  0.0, 1.0, 0.0);
+	mesh_add_vert(&m,  0.5,  0.5, -0.5,  0.0,  1.0,  0.0, 1.0, 1.0);
+	mesh_add_vert(&m, -0.5,  0.5, -0.5,  0.0,  1.0,  0.0, 0.0, 1.0);
+	mesh_add_tri(&m, 16, 17, 18); mesh_add_tri(&m, 16, 18, 19);
+	// -Y face
+	mesh_add_vert(&m, -0.5, -0.5, -0.5,  0.0, -1.0,  0.0, 0.0, 0.0);
+	mesh_add_vert(&m,  0.5, -0.5, -0.5,  0.0, -1.0,  0.0, 1.0, 0.0);
+	mesh_add_vert(&m,  0.5, -0.5,  0.5,  0.0, -1.0,  0.0, 1.0, 1.0);
+	mesh_add_vert(&m, -0.5, -0.5,  0.5,  0.0, -1.0,  0.0, 0.0, 1.0);
+	mesh_add_tri(&m, 20, 21, 22); mesh_add_tri(&m, 20, 22, 23);
+	return m;
+};
+
+// ================================================================
+// PLANE: unit quad on XZ plane at y=0, normal +Y
+// ================================================================
+
+export fn mesh_create_plane() Mesh = {
+	let m = mesh_init();
+	mesh_add_vert(&m, -0.5, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0);
+	mesh_add_vert(&m,  0.5, 0.0, -0.5, 0.0, 1.0, 0.0, 1.0, 0.0);
+	mesh_add_vert(&m,  0.5, 0.0,  0.5, 0.0, 1.0, 0.0, 1.0, 1.0);
+	mesh_add_vert(&m, -0.5, 0.0,  0.5, 0.0, 1.0, 0.0, 0.0, 1.0);
+	mesh_add_tri(&m, 0, 1, 2);
+	mesh_add_tri(&m, 0, 2, 3);
+	return m;
+};
+
+// ================================================================
+// SPHERE: UV sphere with configurable slices/stacks
+// ================================================================
+
+export fn mesh_create_sphere(slices: i32, stacks: i32) Mesh = {
+	let m = mesh_init();
+
+	for (let j: i32 = 0; j <= stacks; j += 1) {
+		let phi = math::PI * (j: f32) / (stacks: f32);
+		let sc_phi = math::sincos(phi);
+		let sp = sc_phi.s;
+		let cp = sc_phi.c;
+		let sv = (j: f32) / (stacks: f32);
+
+		for (let i: i32 = 0; i <= slices; i += 1) {
+			let theta = math::TAU * (i: f32) / (slices: f32);
+			let sc_theta = math::sincos(theta);
+			let st = sc_theta.s;
+			let ct = sc_theta.c;
+			let su = (i: f32) / (slices: f32);
+
+			let nx = sp * ct;
+			let ny = cp;
+			let nz = sp * st;
+			mesh_add_vert(&m, nx * 0.5, ny * 0.5, nz * 0.5, nx, ny, nz, su, sv);
+		};
+	};
+
+	let row: i32 = slices + 1;
+	for (let jj: i32 = 0; jj < stacks; jj += 1) {
+		for (let ii: i32 = 0; ii < slices; ii += 1) {
+			let sa: u16 = (jj * row + ii): u16;
+			let sb: u16 = (jj * row + ii + 1): u16;
+			let sc: u16 = ((jj + 1) * row + ii + 1): u16;
+			let sd: u16 = ((jj + 1) * row + ii): u16;
+			mesh_add_tri(&m, sa, sb, sc);
+			mesh_add_tri(&m, sa, sc, sd);
+		};
+	};
+	return m;
+};
+
+// ================================================================
+// CYLINDER: centered at origin, radius 0.5, height 1 along +Z/-Z
+// ================================================================
+
+export fn mesh_create_cylinder(slices: i32) Mesh = {
+	let m = mesh_init();
+
+	// Side verts — cylinder along Y axis, circle in XZ plane
+	for (let sv: i32 = 0; sv <= slices; sv += 1) {
+		let sv_theta = math::TAU * (sv: f32) / (slices: f32);
+		let sv_sc = math::sincos(sv_theta);
+		let snx = sv_sc.c;
+		let snz = sv_sc.s;
+		let cu = (sv: f32) / (slices: f32);
+		mesh_add_vert(&m, snx * 0.5, -0.5, snz * 0.5, snx, 0.0, snz, cu, 0.0);
+		mesh_add_vert(&m, snx * 0.5,  0.5, snz * 0.5, snx, 0.0, snz, cu, 1.0);
+	};
+
+	// Side faces
+	for (let sf: i32 = 0; sf < slices; sf += 1) {
+		let sb: u16 = (sf * 2): u16;
+		let st: u16 = (sf * 2 + 1): u16;
+		let sbn: u16 = (sf * 2 + 2): u16;
+		let stn: u16 = (sf * 2 + 3): u16;
+		mesh_add_tri(&m, sb, sbn, stn);
+		mesh_add_tri(&m, sb, stn, st);
+	};
+
+	// Top cap center (y = +0.5, normal +Y)
+	let top_center: u16 = m.vert_count: u16;
+	mesh_add_vert(&m, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0, 0.5, 0.5);
+	let top_start: u16 = m.vert_count: u16;
+	for (let tv: i32 = 0; tv <= slices; tv += 1) {
+		let tv_theta = math::TAU * (tv: f32) / (slices: f32);
+		let tv_sc = math::sincos(tv_theta);
+		mesh_add_vert(&m, tv_sc.c * 0.5, 0.5, tv_sc.s * 0.5, 0.0, 1.0, 0.0, 0.0, 0.0);
+	};
+	for (let ti: i32 = 0; ti < slices; ti += 1) {
+		mesh_add_tri(&m, top_center, top_start + (ti: u16), top_start + ((ti + 1): u16));
+	};
+
+	// Bottom cap center (y = -0.5, normal -Y)
+	let bot_center: u16 = m.vert_count: u16;
+	mesh_add_vert(&m, 0.0, -0.5, 0.0, 0.0, -1.0, 0.0, 0.5, 0.5);
+	let bot_start: u16 = m.vert_count: u16;
+	for (let bv: i32 = 0; bv <= slices; bv += 1) {
+		let bv_theta = math::TAU * (bv: f32) / (slices: f32);
+		let bv_sc = math::sincos(bv_theta);
+		mesh_add_vert(&m, bv_sc.c * 0.5, -0.5, bv_sc.s * 0.5, 0.0, -1.0, 0.0, 0.0, 0.0);
+	};
+	for (let bi: i32 = 0; bi < slices; bi += 1) {
+		mesh_add_tri(&m, bot_center, bot_start + ((bi + 1): u16), bot_start + (bi: u16));
+	};
+
+	return m;
+};
+
+// ================================================================
+// STL file loading (binary format, via C shim)
+// ================================================================
+
+@symbol("shim_load_stl") fn shim_load_stl(
+	filename: *u8, verts: *f32, indices: *u16,
+	vert_count: *i32, index_count: *i32,
+	max_verts: i32, max_indices: i32) i32;
+
+@symbol("shim_load_stl_raw") fn shim_load_stl_raw(
+	filename: *u8, verts: *f32, indices: *u16,
+	vert_count: *i32, index_count: *i32,
+	max_verts: i32, max_indices: i32) i32;
+
+export fn mesh_load_stl(filename: *u8) Mesh = {
+	let m = mesh_init();
+	shim_load_stl(filename, &m.verts[0z], &m.indices[0z],
+	              &m.vert_count, &m.index_count,
+	              MAX_VERTS: i32, MAX_INDICES: i32);
+	return m;
+};
+
+// Load STL using original file units (no normalization/scaling).
+export fn mesh_load_stl_raw(filename: *u8) Mesh = {
+	let m = mesh_init();
+	shim_load_stl_raw(filename, &m.verts[0z], &m.indices[0z],
+	                  &m.vert_count, &m.index_count,
+	                  MAX_VERTS: i32, MAX_INDICES: i32);
+	return m;
+};
+
+// Load an STL and optionally decimate triangle count in mesh-space.
+export fn mesh_load_stl_decimated(filename: *u8, target_triangles: i32) Mesh = {
+	let m = mesh_load_stl(filename);
+	if (target_triangles <= 0) {
+		return m;
+	};
+	return mesh_decimate(&m, target_triangles);
+};
+
+// Raw-units variant of decimated STL loading.
+export fn mesh_load_stl_raw_decimated(filename: *u8, target_triangles: i32) Mesh = {
+	let m = mesh_load_stl_raw(filename);
+	if (target_triangles <= 0) {
+		return m;
+	};
+	return mesh_decimate(&m, target_triangles);
+};

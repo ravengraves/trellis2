@@ -1,0 +1,69 @@
+// overlay2d.pka — 2D screen-space shape rendering for Pollyn Engine
+// Draws rectangles, circles, lines into the software framebuffer.
+
+use math;
+
+// Draw a filled rectangle
+export fn draw_rect_filled(fb: *Framebuffer, x: i32, y: i32, w: i32, h: i32,
+                           r: u8, g: u8, b: u8, a: u8) void = {
+	let x0 = x; let y0 = y;
+	let x1 = x + w; let y1 = y + h;
+	if (x0 < 0) { x0 = 0; };
+	if (y0 < 0) { y0 = 0; };
+	if (x1 > fb.width)  { x1 = fb.width; };
+	if (y1 > fb.height) { y1 = fb.height; };
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			fb_set_pixel(fb, px, py, -999.0, r, g, b, a);
+		};
+	};
+};
+
+// Draw a rectangle outline
+export fn draw_rect_outline(fb: *Framebuffer, x: i32, y: i32, w: i32, h: i32,
+                            r: u8, g: u8, b: u8, a: u8) void = {
+	raster_line(fb, x, y, x + w - 1, y, -999.0, r, g, b, a);
+	raster_line(fb, x + w - 1, y, x + w - 1, y + h - 1, -999.0, r, g, b, a);
+	raster_line(fb, x + w - 1, y + h - 1, x, y + h - 1, -999.0, r, g, b, a);
+	raster_line(fb, x, y + h - 1, x, y, -999.0, r, g, b, a);
+};
+
+// Draw a filled circle (midpoint algorithm)
+export fn draw_circle_filled(fb: *Framebuffer, cx: i32, cy: i32, radius: i32,
+                             r: u8, g: u8, b: u8, a: u8) void = {
+	let r2 = radius * radius;
+	for (let dy: i32 = -radius; dy <= radius; dy += 1) {
+		for (let dx: i32 = -radius; dx <= radius; dx += 1) {
+			if (dx * dx + dy * dy <= r2) {
+				fb_set_pixel(fb, cx + dx, cy + dy, -999.0, r, g, b, a);
+			};
+		};
+	};
+};
+
+// Draw a circle outline
+export fn draw_circle_outline(fb: *Framebuffer, cx: i32, cy: i32, radius: i32,
+                              r: u8, g: u8, b: u8, a: u8) void = {
+	// Midpoint circle algorithm
+	let x: i32 = radius;
+	let y: i32 = 0;
+	let err: i32 = 1 - radius;
+
+	for (x >= y) {
+		fb_set_pixel(fb, cx + x, cy + y, -999.0, r, g, b, a);
+		fb_set_pixel(fb, cx - x, cy + y, -999.0, r, g, b, a);
+		fb_set_pixel(fb, cx + x, cy - y, -999.0, r, g, b, a);
+		fb_set_pixel(fb, cx - x, cy - y, -999.0, r, g, b, a);
+		fb_set_pixel(fb, cx + y, cy + x, -999.0, r, g, b, a);
+		fb_set_pixel(fb, cx - y, cy + x, -999.0, r, g, b, a);
+		fb_set_pixel(fb, cx + y, cy - x, -999.0, r, g, b, a);
+		fb_set_pixel(fb, cx - y, cy - x, -999.0, r, g, b, a);
+		y = y + 1;
+		if (err < 0) {
+			err = err + 2 * y + 1;
+		} else {
+			x = x - 1;
+			err = err + 2 * (y - x) + 1;
+		};
+	};
+};

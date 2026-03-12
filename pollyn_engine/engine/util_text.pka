@@ -1,0 +1,21 @@
+// util_text.pka — Text helpers for engine.
+
+use fmt;
+
+export fn util_text_add_fps(rt: *E2Runtime, frame_ms: f64,
+	x_frac: f32, y_frac: f32) void = {
+	let tbuf: [64]u8 = [0...];
+	let tfmt = fmt::New(tbuf[0z..64z]);
+	fmt::Write(&tfmt, "r ");
+	fmt::Wi64(&tfmt, frame_ms: i64);
+	fmt::Write(&tfmt, "ms");
+	if (rt.mode == E2_MODE_TERMINAL) {
+		fmt::Write(&tfmt, " d ");
+		fmt::Wf64(&tfmt, rt.last_term_draw_ms, 2, "fix");
+		fmt::Write(&tfmt, "ms ");
+		fmt::Wi64(&tfmt, rt.last_term_changed_cells: i64);
+		fmt::Write(&tfmt, "/");
+		fmt::Wi64(&tfmt, rt.last_term_total_cells: i64);
+	};
+	e2_text_add(rt, x_frac, y_frac, fmt::ToStr(&tfmt), 255, 255, 0);
+};

@@ -1,0 +1,180 @@
+platform = libc
+builddir = build
+
+# MuJoCo paths (vendored via trellis)
+mujoco_dir = ../trellis/vendor/mujoco
+mujoco_inc = -I$mujoco_dir/include
+mujoco_lib = $mujoco_dir/build/lib/libmujoco.a
+mujoco_extra = $mujoco_dir/build/lib/libtinyxml2.a $mujoco_dir/build/lib/liblodepng.a $mujoco_dir/build/lib/libqhullstatic_r.a $mujoco_dir/build/lib/libqhullcpp.a $mujoco_dir/build/lib/libccd.a $mujoco_dir/build/lib/libtinyobjloader.a
+
+# Libraries
+gl_libs = -lrt -lglfw -lGLESv2 -lEGL -lm -lpthread -ldl -lstdc++
+
+# Pollyn Engine sources vendored into trellis2/
+src_math3d = pollyn_engine/src/math3d.pka
+src_color = pollyn_engine/src/color.pka
+src_mesh = pollyn_engine/src/mesh.pka
+src_material = pollyn_engine/src/material.pka
+src_camera = pollyn_engine/src/camera.pka
+src_input = pollyn_engine/src/input.pka
+src_terminal = pollyn_engine/src/terminal.pka
+src_text = pollyn_engine/src/text.pka
+src_overlay2d = pollyn_engine/src/overlay2d.pka
+src_cv = pollyn_engine/src/cv.pka
+src_renderer = pollyn_engine/src/renderer.pka
+src_engine_core = pollyn_engine/engine/core_engine.pka
+src_engine_util_buffers = pollyn_engine/engine/util_buffers.pka
+src_engine_util_mesh = pollyn_engine/engine/util_mesh.pka
+src_engine_util_camera = pollyn_engine/engine/util_camera.pka
+src_engine_util_text = pollyn_engine/engine/util_text.pka
+src_engine_util_lights = pollyn_engine/engine/util_lights.pka
+
+pka_srcs_engine = $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights
+
+# GL + MuJoCo shims
+gl_shim = pollyn_engine/shim/pollyn_shim.c
+mj_shim = shim/mujoco_shim.c
+
+# Trellis2 Pika sources (paths relative to trellis2/ for ninja deps)
+src_mujoco = src/mujoco.pka
+src_scene = src/scene.pka
+src_depth_sensor = src/depth_sensor.pka
+src_camera_view = src/camera_view.pka
+src_main = src/main.pka
+src_roseviz_app = src/roseviz_app.pka
+src_roseviz_main = src/roseviz_main.pka
+
+# Same paths relative to compiler/ for pikacc command
+t2_math3d = ../trellis2/pollyn_engine/src/math3d.pka
+t2_color = ../trellis2/pollyn_engine/src/color.pka
+t2_mesh = ../trellis2/pollyn_engine/src/mesh.pka
+t2_material = ../trellis2/pollyn_engine/src/material.pka
+t2_camera = ../trellis2/pollyn_engine/src/camera.pka
+t2_input = ../trellis2/pollyn_engine/src/input.pka
+t2_terminal = ../trellis2/pollyn_engine/src/terminal.pka
+t2_text = ../trellis2/pollyn_engine/src/text.pka
+t2_overlay2d = ../trellis2/pollyn_engine/src/overlay2d.pka
+t2_cv = ../trellis2/pollyn_engine/src/cv.pka
+t2_renderer = ../trellis2/pollyn_engine/src/renderer.pka
+t2_engine_core = ../trellis2/pollyn_engine/engine/core_engine.pka
+t2_engine_util_buffers = ../trellis2/pollyn_engine/engine/util_buffers.pka
+t2_engine_util_mesh = ../trellis2/pollyn_engine/engine/util_mesh.pka
+t2_engine_util_camera = ../trellis2/pollyn_engine/engine/util_camera.pka
+t2_engine_util_text = ../trellis2/pollyn_engine/engine/util_text.pka
+t2_engine_util_lights = ../trellis2/pollyn_engine/engine/util_lights.pka
+t2_mujoco = ../trellis2/src/mujoco.pka
+t2_scene = ../trellis2/src/scene.pka
+t2_depth_sensor = ../trellis2/src/depth_sensor.pka
+t2_camera_view = ../trellis2/src/camera_view.pka
+t2_main = ../trellis2/src/main.pka
+t2_roseviz_app = ../trellis2/src/roseviz_app.pka
+t2_roseviz_main = ../trellis2/src/roseviz_main.pka
+t2_test_physics = ../trellis2/test/test_physics.pka
+t2_test_render = ../trellis2/test/test_render.pka
+t2_test_cv = ../trellis2/test/test_cv.pka
+t2_test_depth = ../trellis2/test/test_depth.pka
+t2_test_texture2d = ../trellis2/test/test_texture2d.pka
+t2_test_roseviz_ui = ../trellis2/test/test_roseviz_ui.pka
+t2_gl_shim = ../trellis2/pollyn_engine/shim/pollyn_shim.c
+t2_mj_shim = ../trellis2/shim/mujoco_shim.c
+
+pka_srcs_engine_compiler = $t2_math3d $t2_color $t2_mesh $t2_material $t2_camera $t2_input $t2_terminal $t2_text $t2_overlay2d $t2_cv $t2_renderer $t2_engine_core $t2_engine_util_buffers $t2_engine_util_mesh $t2_engine_util_camera $t2_engine_util_text $t2_engine_util_lights
+
+# Shader dir
+shader_dir = pollyn_engine/shaders
+
+rule pikacc
+  command = cd ../compiler && LIBS="$libs" CFLAGS_EXTRA="$cflags" bin/pikacc $srcs --platform $platform -o ../trellis2/$out
+  description = PIKACC $out
+
+rule run
+  command = cd /home/claude/source/pollyn2/trellis2 && $cmd && touch $out
+  description = RUN $cmd
+
+# --- Targets ---
+
+# Link order: static libs first, then system libs (for symbol resolution)
+all_libs = $mujoco_lib $mujoco_extra $gl_libs
+roseviz_libs = $gl_libs
+
+# Physics test
+build $builddir/test_physics: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco test/test_physics.pka $gl_shim $mj_shim
+  srcs = $pka_srcs_engine_compiler $t2_mujoco $t2_test_physics $t2_gl_shim $t2_mj_shim
+  libs = $all_libs
+  cflags = $mujoco_inc
+
+# Render test (needs GL via xvfb)
+build $builddir/test_render: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene test/test_render.pka $gl_shim $mj_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag
+  srcs = $pka_srcs_engine_compiler $t2_mujoco $t2_scene $t2_test_render $t2_gl_shim $t2_mj_shim
+  libs = $all_libs
+  cflags = $mujoco_inc
+
+# Full viewer
+build $builddir/trellis2: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene $src_depth_sensor $src_camera_view $src_main $gl_shim $mj_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag
+  srcs = $pka_srcs_engine_compiler $t2_mujoco $t2_scene $t2_depth_sensor $t2_camera_view $t2_main $t2_gl_shim $t2_mj_shim
+  libs = $all_libs
+  cflags = $mujoco_inc
+
+# Roseviz shell (images + point clouds only)
+build $builddir/roseviz: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_main $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_main $t2_gl_shim
+  libs = $roseviz_libs
+  cflags =
+
+# --- Test runners ---
+
+build $builddir/.test_physics.ok: run | $builddir/test_physics
+  cmd = ./$builddir/test_physics
+
+build $builddir/.test_render.ok: run | $builddir/test_render
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_render
+
+# CV test (needs GL via xvfb)
+build $builddir/test_cv: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene test/test_cv.pka $gl_shim $mj_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag
+  srcs = $pka_srcs_engine_compiler $t2_mujoco $t2_scene $t2_test_cv $t2_gl_shim $t2_mj_shim
+  libs = $all_libs
+  cflags = $mujoco_inc
+
+build $builddir/.test_cv.ok: run | $builddir/test_cv
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_cv
+
+# Depth sensor test (needs GL via xvfb)
+build $builddir/test_depth: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene $src_depth_sensor test/test_depth.pka $gl_shim $mj_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag
+  srcs = $pka_srcs_engine_compiler $t2_mujoco $t2_scene $t2_depth_sensor $t2_test_depth $t2_gl_shim $t2_mj_shim
+  libs = $all_libs
+  cflags = $mujoco_inc
+
+build $builddir/.test_depth.ok: run | $builddir/test_depth
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_depth
+
+# 2D texture test (needs GL via xvfb)
+build $builddir/test_texture2d: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene $src_depth_sensor $src_camera_view test/test_texture2d.pka $gl_shim $mj_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag
+  srcs = $pka_srcs_engine_compiler $t2_mujoco $t2_scene $t2_depth_sensor $t2_camera_view $t2_test_texture2d $t2_gl_shim $t2_mj_shim
+  libs = $all_libs
+  cflags = $mujoco_inc
+
+build $builddir/.test_texture2d.ok: run | $builddir/test_texture2d
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_texture2d
+
+# Roseviz UI test (headless)
+build $builddir/test_roseviz_ui: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app test/test_roseviz_ui.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_test_roseviz_ui $t2_gl_shim
+  libs = $roseviz_libs
+  cflags =
+
+build $builddir/.test_roseviz_ui.ok: run | $builddir/test_roseviz_ui
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_roseviz_ui
+
+# --- Phony targets ---
+
+build test_physics: phony $builddir/test_physics
+build test_render: phony $builddir/test_render
+build test_cv: phony $builddir/test_cv
+build test_depth: phony $builddir/test_depth
+build test_texture2d: phony $builddir/test_texture2d
+build test_roseviz_ui: phony $builddir/test_roseviz_ui
+build trellis2: phony $builddir/trellis2
+build roseviz: phony $builddir/roseviz
+build check: phony $builddir/.test_physics.ok $builddir/.test_render.ok $builddir/.test_cv.ok $builddir/.test_depth.ok $builddir/.test_texture2d.ok $builddir/.test_roseviz_ui.ok
+
+default trellis2

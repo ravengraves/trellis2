@@ -1,0 +1,145 @@
+// scene.pka — Maps MuJoCo geoms to Pollyn Engine render data.
+// Uses a Scene struct allocated by the caller (no module-level state).
+
+use fmt;
+
+export def MAX_GEOMS: size = 256z;
+
+export type Scene = struct {
+	gpu_meshes: [MAX_GEOMS]E2GpuMesh,
+	transforms: [MAX_GEOMS]Mat4,
+	materials: [MAX_GEOMS]Material,
+	geom_types: [MAX_GEOMS]i32,
+	gpu_box: E2GpuMesh,
+	gpu_sphere: E2GpuMesh,
+	gpu_cylinder: E2GpuMesh,
+	gpu_plane: E2GpuMesh,
+	geom_count: i32,
+};
+
+export fn scene_new() Scene = {
+	return Scene {
+		gpu_meshes = [E2GpuMesh { vbo = 0, ibo = 0, index_count = 0, valid = false }...],
+		transforms = [mat4_identity()...],
+		materials = [material_pbr(color_gray(0.7), 0.0, 0.5)...],
+		geom_types = [0...],
+		gpu_box = E2GpuMesh { vbo = 0, ibo = 0, index_count = 0, valid = false },
+		gpu_sphere = E2GpuMesh { vbo = 0, ibo = 0, index_count = 0, valid = false },
+		gpu_cylinder = E2GpuMesh { vbo = 0, ibo = 0, index_count = 0, valid = false },
+		gpu_plane = E2GpuMesh { vbo = 0, ibo = 0, index_count = 0, valid = false },
+		geom_count = 0,
+	};
+};
+
+// Initialize scene: create primitive meshes, read geom types/colors from MuJoCo.
+export fn scene_init(sc: *Scene) void = {
+	let box = mesh_create_box();
+	let sphere = mesh_create_sphere(12, 8);
+	let cylinder = mesh_create_cylinder(12);
+	let plane = mesh_create_plane();
+
+	sc.gpu_box = util_mesh_upload(&box);
+	sc.gpu_sphere = util_mesh_upload(&sphere);
+	sc.gpu_cylinder = util_mesh_upload(&cylinder);
+	sc.gpu_plane = util_mesh_upload(&plane);
+
+	sc.geom_count = mj_shim_ngeom();
+	if (sc.geom_count > (MAX_GEOMS: i32)) { sc.geom_count = MAX_GEOMS: i32; };
+
+	let rgba: [4]f32 = [0.0...];
+	for (let i: i32 = 0; i < sc.geom_count; i += 1) {
+		let idx: size = i: size;
+		sc.geom_types[idx] = mj_shim_geom_type(i);
+
+		// Assign the shared primitive GPU mesh
+		let gt = sc.geom_types[idx];
+		if (gt == MJ_GEOM_BOX) {
+			sc.gpu_meshes[idx] = sc.gpu_box;
+		} else if (gt == MJ_GEOM_SPHERE || gt == MJ_GEOM_ELLIPSOID || gt == MJ_GEOM_CAPSULE) {
+			sc.gpu_meshes[idx] = sc.gpu_sphere;
+		} else if (gt == MJ_GEOM_CYLINDER) {
+			sc.gpu_meshes[idx] = sc.gpu_cylinder;
+		} else if (gt == MJ_GEOM_PLANE) {
+			sc.gpu_meshes[idx] = sc.gpu_plane;
+		} else {
+			sc.gpu_meshes[idx] = sc.gpu_box;
+		};
+
+		// Read color from MuJoCo
+		mj_shim_geom_rgba(i, &rgba[0z]);
+		sc.materials[idx] = material_pbr(
+			color_new(rgba[0z], rgba[1z], rgba[2z], rgba[3z]),
+			0.0,
+			0.5);
+	};
+};
+
+// Update transforms from current MuJoCo state.
+export fn scene_update(sc: *Scene) void = {
+	let pos: [3]f32 = [0.0...];
+	let rot: [9]f32 = [0.0...];
+	let gsz: [3]f32 = [0.0...];
+	for (let i: i32 = 0; i < sc.geom_count; i += 1) {
+		let idx: size = i: size;
+		mj_shim_geom_pos(i, &pos[0z]);
+		mj_shim_geom_mat(i, &rot[0z]);
+		mj_shim_geom_size(i, &gsz[0z]);
+
+		// Compute scale based on geom type
+		let sx: f32 = 1.0;
+		let sy: f32 = 1.0;
+		let sz: f32 = 1.0;
+		let gt = sc.geom_types[idx];
+		if (gt == MJ_GEOM_BOX) {
+			sx = gsz[0z]; sy = gsz[1z]; sz = gsz[2z];
+		} else if (gt == MJ_GEOM_SPHERE || gt == MJ_GEOM_ELLIPSOID) {
+			sx = gsz[0z]; sy = gsz[0z]; sz = gsz[0z];
+		} else if (gt == MJ_GEOM_CYLINDER) {
+			sx = gsz[0z]; sy = gsz[0z]; sz = gsz[1z];
+		} else if (gt == MJ_GEOM_CAPSULE) {
+			sx = gsz[0z]; sy = gsz[0z]; sz = gsz[0z];
+		} else if (gt == MJ_GEOM_PLANE) {
+			let extent = mj_shim_stat_extent();
+			let pscale = extent * 2.0;
+			if (pscale < 10.0) { pscale = 10.0; };
+			sx = pscale; sy = pscale; sz = 1.0;
+		};
+
+		// Build column-major 4x4 from row-major 3x3 rotation + pos + scale
+		// MuJoCo row-major: rot[row*3+col], GL column-major: m[col*4+row]
+		let m = mat4_identity();
+		m.d[0z]  = rot[0z] * sx;
+		m.d[1z]  = rot[3z] * sx;
+		m.d[2z]  = rot[6z] * sx;
+		m.d[4z]  = rot[1z] * sy;
+		m.d[5z]  = rot[4z] * sy;
+		m.d[6z]  = rot[7z] * sy;
+		m.d[8z]  = rot[2z] * sz;
+		m.d[9z]  = rot[5z] * sz;
+		m.d[10z] = rot[8z] * sz;
+		m.d[12z] = pos[0z];
+		m.d[13z] = pos[1z];
+		m.d[14z] = pos[2z];
+		m.d[15z] = 1.0;
+		sc.transforms[idx] = m;
+	};
+};
+
+// Populate a geom pass buffer with current scene state.
+export fn scene_geom_pass(sc: *Scene, buf: *E2GeomPassBuffer) void = {
+	util_geom_pass_clear(buf);
+	for (let i: i32 = 0; i < sc.geom_count; i += 1) {
+		let idx: size = i: size;
+		if (!sc.gpu_meshes[idx].valid) { continue; };
+		util_geom_pass_add(buf, &sc.gpu_meshes[idx], sc.transforms[idx], sc.materials[idx]);
+	};
+};
+
+// Destroy GPU primitive meshes.
+export fn scene_destroy(sc: *Scene) void = {
+	e2_gpu_mesh_destroy(&sc.gpu_box);
+	e2_gpu_mesh_destroy(&sc.gpu_sphere);
+	e2_gpu_mesh_destroy(&sc.gpu_cylinder);
+	e2_gpu_mesh_destroy(&sc.gpu_plane);
+	sc.geom_count = 0;
+};

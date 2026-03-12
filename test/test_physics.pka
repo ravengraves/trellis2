@@ -1,0 +1,78 @@
+// test_physics.pka — Verify MuJoCo physics stepping via the C shim.
+// Loads ball.xml, steps physics, checks that the sphere falls under gravity.
+
+use fmt;
+
+export fn main() void = {
+	fmt::Printsln("=== test_physics ===");
+
+	// Load model
+	let path: [20]u8 = ['m', 'o', 'd', 'e', 'l', 's', '/', 'b', 'a', 'l', 'l', '.', 'x', 'm', 'l', 0, 0, 0, 0, 0];
+	let rc = mj_shim_load(&path[0z]);
+	assert(rc == 0, "model load");
+
+	let ngeom = mj_shim_ngeom();
+	let tbuf: [256]u8 = [0...];
+	let tf = fmt::New(tbuf[0z..256z]);
+	fmt::Write(&tf, "  ngeom: ");
+	fmt::Wi64(&tf, ngeom: i64);
+	fmt::Println(&tf);
+	assert(ngeom >= 2, "at least 2 geoms");
+
+	// Find sphere geom (type=2)
+	let sphere_idx: i32 = -1;
+	for (let i: i32 = 0; i < ngeom; i += 1) {
+		if (mj_shim_geom_type(i) == MJ_GEOM_SPHERE) {
+			sphere_idx = i;
+		};
+	};
+	assert(sphere_idx >= 0, "found sphere geom");
+
+	// Read initial position
+	let pos0: [3]f32 = [0.0...];
+	mj_shim_geom_pos(sphere_idx, &pos0[0z]);
+
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  initial z: ");
+	fmt::Wf64(&tf, pos0[2z]: f64, 4, "fix");
+	fmt::Println(&tf);
+
+	// Step physics 500 times (1 second at 0.002s timestep)
+	for (let s: i32 = 0; s < 500; s += 1) {
+		mj_shim_step();
+	};
+
+	// Read new position
+	let pos1: [3]f32 = [0.0...];
+	mj_shim_geom_pos(sphere_idx, &pos1[0z]);
+
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  final z: ");
+	fmt::Wf64(&tf, pos1[2z]: f64, 4, "fix");
+	fmt::Println(&tf);
+
+	// Sphere should have fallen (z decreased)
+	assert(pos1[2z] < pos0[2z], "sphere fell under gravity");
+
+	// Sphere should be near ground (z near sphere radius 0.2)
+	assert(pos1[2z] < 1.0, "sphere is below initial height");
+	assert(pos1[2z] > -1.0, "sphere did not fall through ground");
+
+	// Verify geom types
+	let found_plane = false;
+	for (let i: i32 = 0; i < ngeom; i += 1) {
+		if (mj_shim_geom_type(i) == MJ_GEOM_PLANE) {
+			found_plane = true;
+		};
+	};
+	assert(found_plane, "found plane geom");
+
+	// Verify RGBA reading
+	let rgba: [4]f32 = [0.0...];
+	mj_shim_geom_rgba(sphere_idx, &rgba[0z]);
+	assert(rgba[0z] > 0.5, "sphere is reddish");
+	assert(rgba[3z] > 0.9, "sphere alpha is ~1.0");
+
+	mj_shim_free();
+	fmt::Printsln("=== test_physics passed ===");
+};

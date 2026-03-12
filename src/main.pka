@@ -1,0 +1,132 @@
+// main.pka — Trellis2 MuJoCo viewer in Pika + Pollyn Engine.
+// Usage: trellis2 [--terminal] [--half-cell] [--term-lines] model.xml
+
+use fmt;
+use clock;
+
+@symbol("shim_has_arg") fn shim_has_arg(flag: *u8) i32;
+@symbol("shim_get_file_arg") fn shim_get_file_arg(out: *u8, max_len: i32) i32;
+
+export fn main() void = {
+	// Parse CLI flags
+	let term_flag: [11]u8 = ['-', '-', 't', 'e', 'r', 'm', 'i', 'n', 'a', 'l', 0];
+	let half_cell_flag: [12]u8 = ['-', '-', 'h', 'a', 'l', 'f', '-', 'c', 'e', 'l', 'l', 0];
+	let term_lines_flag: [13]u8 = ['-', '-', 't', 'e', 'r', 'm', '-', 'l', 'i', 'n', 'e', 's', 0];
+
+	let mode = E2_MODE_WINDOW;
+	if (shim_has_arg(&term_flag[0z]) != 0) {
+		mode = E2_MODE_TERMINAL;
+	};
+
+	// Get model path from CLI
+	let model_path: [512]u8 = [0...];
+	let path_len = shim_get_file_arg(&model_path[0z], 512);
+	if (path_len <= 0) {
+		fmt::Printsln("usage: trellis2 [--terminal] model.xml");
+		return;
+	};
+
+	// Load MuJoCo model
+	if (mj_shim_load(&model_path[0z]) != 0) {
+		fmt::Printsln("failed to load model");
+		return;
+	};
+
+	let ngeom = mj_shim_ngeom();
+	let tbuf: [128]u8 = [0...];
+	let tfmt = fmt::New(tbuf[0z..128z]);
+	fmt::Write(&tfmt, "loaded model: ");
+	fmt::Wi64(&tfmt, ngeom: i64);
+	fmt::Write(&tfmt, " geoms");
+	fmt::Println(&tfmt);
+
+	// Init engine
+	let rt = e2_runtime_init(mode, 800, 600);
+	if (shim_has_arg(&half_cell_flag[0z]) != 0) {
+		rt.term_style = E2_TERM_HALF_CELL;
+	};
+	if (shim_has_arg(&term_lines_flag[0z]) != 0) {
+		rt.term_present_mode = E2_TERM_PRESENT_LINES;
+	};
+	rt.target_fps = 30;
+	if (!e2_runtime_start(&rt)) {
+		fmt::Printsln("engine start failed");
+		mj_shim_free();
+		return;
+	};
+
+	// Init scene (creates GPU meshes, reads geom data)
+	let sc = scene_new();
+	scene_init(&sc);
+
+	// Create grid lines
+	let line_cpu = util_cpu_color_buffer_init();
+	util_lines_add_grid(&line_cpu, 4.0, 16, color_gray(0.25));
+	util_lines_add_axes(&line_cpu, 0.5);
+	let line_gpu = util_color_upload(&line_cpu);
+
+	// Pass buffers
+	let geom_pass = util_geom_pass_init();
+	let line_pass = util_color_pass_init();
+	let lights = util_light_buffer_init();
+	let env = env_default();
+
+	// Camera
+	let cam = camera_default();
+	cam.distance = 5.0;
+	cam.yaw = 45.0;
+	cam.pitch = 30.0;
+	cam.target = vec3_new(0.0, 0.0, 0.5);
+
+	let frame_ms: f64 = 0.0;
+
+	// Main loop
+	for (e2_runtime_should_run(&rt)) {
+		let t0_tick = clock::Now();
+		e2_runtime_begin_frame(&rt);
+
+		// Camera controls
+		util_camera_apply_orbit_controls(&cam, &rt.input, rt.mode == E2_MODE_TERMINAL);
+
+		// Step physics
+		mj_shim_step();
+
+		// Update scene transforms from MuJoCo state
+		scene_update(&sc);
+
+		// Build geom pass
+		scene_geom_pass(&sc, &geom_pass);
+
+		// Build line pass
+		util_color_pass_clear(&line_pass);
+		util_color_pass_add(&line_pass, &line_gpu, 1.0);
+
+		// Render
+		e2_pass_begin(&rt, color_new(0.12, 0.12, 0.16, 1.0));
+		let free_cam = util_camera_free_from_orbit(&cam);
+		e2_pass_3d_geom(&rt, &free_cam, E2_GEOM_MODE_PBR,
+			geom_pass.draws[0z..(geom_pass.count: size)],
+			util_light_buffer_slice(&lights), &env);
+		e2_pass_3d_lines(&rt, &free_cam, line_pass.draws[0z..(line_pass.count: size)]);
+		e2_pass_end(&rt);
+
+		// FPS text
+		util_text_add_fps(&rt, frame_ms, 0.01, 0.01);
+		e2_pass_text(&rt);
+
+		let pre_present_ms = clock::Since(t0_tick) * 1000.0f64;
+		e2_runtime_present(&rt);
+
+		if (rt.mode == E2_MODE_TERMINAL) {
+			frame_ms = pre_present_ms + rt.last_term_draw_ms;
+		} else {
+			frame_ms = clock::Since(t0_tick) * 1000.0f64;
+		};
+	};
+
+	// Cleanup
+	scene_destroy(&sc);
+	e2_gpu_color_destroy(&line_gpu);
+	mj_shim_free();
+	e2_runtime_shutdown(&rt);
+};

@@ -1,0 +1,80 @@
+// color.pka — RGBA color type and utilities
+
+export type Color = struct { r: f32, g: f32, b: f32, a: f32 };
+
+export fn color_new(r: f32, g: f32, b: f32, a: f32) Color = {
+	return Color { r = r, g = g, b = b, a = a };
+};
+
+export fn color_white() Color = {
+	return Color { r = 1.0, g = 1.0, b = 1.0, a = 1.0 };
+};
+
+export fn color_black() Color = {
+	return Color { r = 0.0, g = 0.0, b = 0.0, a = 1.0 };
+};
+
+export fn color_red() Color = {
+	return Color { r = 1.0, g = 0.0, b = 0.0, a = 1.0 };
+};
+
+export fn color_green() Color = {
+	return Color { r = 0.0, g = 1.0, b = 0.0, a = 1.0 };
+};
+
+export fn color_blue() Color = {
+	return Color { r = 0.0, g = 0.0, b = 1.0, a = 1.0 };
+};
+
+export fn color_yellow() Color = {
+	return Color { r = 1.0, g = 1.0, b = 0.0, a = 1.0 };
+};
+
+export fn color_gray(v: f32) Color = {
+	return Color { r = v, g = v, b = v, a = 1.0 };
+};
+
+export fn color_to_u8r(c: Color) u8 = {
+	let v: i32 = (c.r * 255.0): i32;
+	if (v < 0) { v = 0; };
+	if (v > 255) { v = 255; };
+	return v: u8;
+};
+
+export fn color_to_u8g(c: Color) u8 = {
+	let v: i32 = (c.g * 255.0): i32;
+	if (v < 0) { v = 0; };
+	if (v > 255) { v = 255; };
+	return v: u8;
+};
+
+export fn color_to_u8b(c: Color) u8 = {
+	let v: i32 = (c.b * 255.0): i32;
+	if (v < 0) { v = 0; };
+	if (v > 255) { v = 255; };
+	return v: u8;
+};
+
+export fn color_lerp(a: Color, b: Color, t: f32) Color = {
+	return Color {
+		r = a.r + (b.r - a.r) * t,
+		g = a.g + (b.g - a.g) * t,
+		b = a.b + (b.b - a.b) * t,
+		a = a.a + (b.a - a.a) * t
+	};
+};
+
+// Multiply color by scalar (for lighting)
+export fn color_mul_scalar(c: Color, s: f32) Color = {
+	return Color { r = c.r * s, g = c.g * s, b = c.b * s, a = c.a };
+};
+
+// Clamp to [0,1]
+export fn color_clamp(c: Color) Color = {
+	let cr = c.r; let cg = c.g; let cb = c.b; let ca = c.a;
+	if (cr < 0.0) { cr = 0.0; }; if (cr > 1.0) { cr = 1.0; };
+	if (cg < 0.0) { cg = 0.0; }; if (cg > 1.0) { cg = 1.0; };
+	if (cb < 0.0) { cb = 0.0; }; if (cb > 1.0) { cb = 1.0; };
+	if (ca < 0.0) { ca = 0.0; }; if (ca > 1.0) { ca = 1.0; };
+	return Color { r = cr, g = cg, b = cb, a = ca };
+};

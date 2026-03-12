@@ -1,0 +1,115 @@
+// test_render.pka — Verify MuJoCo scene rendering via Pollyn Engine.
+// Loads ball.xml, inits engine headless, renders one frame, checks pixels.
+
+use fmt;
+
+fn count_nonblack_rgb(pixels: []u8) i32 = {
+	let n: i32 = 0;
+	let i: size = 0z;
+	for (i + 2z < pixels.len) {
+		if (pixels[i] != 0u8 || pixels[i + 1z] != 0u8 || pixels[i + 2z] != 0u8) {
+			n = n + 1;
+		};
+		i = i + 3z;
+	};
+	return n;
+};
+
+export fn main() void = {
+	fmt::Printsln("=== test_render ===");
+
+	// Load model
+	let path: [20]u8 = ['m', 'o', 'd', 'e', 'l', 's', '/', 'b', 'a', 'l', 'l', '.', 'x', 'm', 'l', 0, 0, 0, 0, 0];
+	let rc = mj_shim_load(&path[0z]);
+	assert(rc == 0, "model load");
+
+	// Init engine headless
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 128, 96);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	// Init scene
+	let sc = scene_new();
+	scene_init(&sc);
+	scene_update(&sc);
+
+	// Build pass buffers
+	let geom_pass = util_geom_pass_init();
+	scene_geom_pass(&sc, &geom_pass);
+
+	let tbuf: [128]u8 = [0...];
+	let tf = fmt::New(tbuf[0z..128z]);
+	fmt::Write(&tf, "  geom draws: ");
+	fmt::Wi64(&tf, geom_pass.count: i64);
+	fmt::Println(&tf);
+	assert(geom_pass.count > 0, "geom draws > 0");
+
+	// Create grid lines
+	let line_cpu = util_cpu_color_buffer_init();
+	util_lines_add_grid(&line_cpu, 4.0, 8, color_gray(0.3));
+	let line_gpu = util_color_upload(&line_cpu);
+	let line_pass = util_color_pass_init();
+	util_color_pass_add(&line_pass, &line_gpu, 1.0);
+
+	// Setup camera and lights
+	let cam_orbit = camera_default();
+	cam_orbit.distance = 4.0;
+	cam_orbit.pitch = 25.0;
+	cam_orbit.target = vec3_new(0.0, 0.0, 0.5);
+	let cam = freecam_from_orbit(&cam_orbit);
+	let lights = util_light_buffer_init();
+	let env = env_default();
+
+	// Render one frame
+	e2_pass_begin(&rt, color_new(0.1, 0.1, 0.15, 1.0));
+	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_PBR,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		util_light_buffer_slice(&lights), &env);
+	e2_pass_3d_lines(&rt, &cam, line_pass.draws[0z..(line_pass.count: size)]);
+	e2_pass_end(&rt);
+
+	// Analyze pixels
+	let npixels = rt.fb.width * rt.fb.height;
+	let nbytes: size = (npixels * 3): size;
+	let colored = count_nonblack_rgb(rt.fb.pixels[0z..nbytes]);
+
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  non-black pixels: ");
+	fmt::Wi64(&tf, colored: i64);
+	fmt::Write(&tf, " / ");
+	fmt::Wi64(&tf, npixels: i64);
+	fmt::Println(&tf);
+
+	// Verify something was rendered
+	assert(colored > 100, "frame has rendered content");
+
+	// Check color variation (multiple objects with different colors)
+	let red_pixels: i32 = 0;
+	let blue_pixels: i32 = 0;
+	let i: size = 0z;
+	for (i + 2z < nbytes) {
+		let r = rt.fb.pixels[i];
+		let g = rt.fb.pixels[i + 1z];
+		let b = rt.fb.pixels[i + 2z];
+		if (r > 100u8 && g < 80u8 && b < 80u8) {
+			red_pixels = red_pixels + 1;
+		};
+		if (b > 100u8 && r < 80u8 && g < 80u8) {
+			blue_pixels = blue_pixels + 1;
+		};
+		i = i + 3z;
+	};
+
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  red pixels: ");
+	fmt::Wi64(&tf, red_pixels: i64);
+	fmt::Write(&tf, ", blue pixels: ");
+	fmt::Wi64(&tf, blue_pixels: i64);
+	fmt::Println(&tf);
+
+	// Cleanup
+	scene_destroy(&sc);
+	e2_gpu_color_destroy(&line_gpu);
+	mj_shim_free();
+	e2_runtime_shutdown(&rt);
+	fmt::Printsln("=== test_render passed ===");
+};

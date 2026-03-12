@@ -1,0 +1,33 @@
+// util_lights.pka — Light helpers for engine.
+
+export def E2_MAX_LIGHTS: size = 8z;
+
+export type E2LightBuffer = struct {
+	lights: [E2_MAX_LIGHTS]Light,
+	count: i32,
+};
+
+fn util_default_light() Light = {
+	return light_directional(vec3_new(2.0, 1.0, 2.0), color_white());
+};
+
+export fn util_light_buffer_init() E2LightBuffer = {
+	return E2LightBuffer {
+		lights = [util_default_light()...],
+		count = 1,
+	};
+};
+
+export fn util_light_buffer_clear(buf: *E2LightBuffer) void = {
+	buf.count = 0;
+};
+
+export fn util_light_buffer_add(buf: *E2LightBuffer, l: Light) void = {
+	if (buf.count >= (E2_MAX_LIGHTS: i32)) { return; };
+	buf.lights[buf.count: size] = l;
+	buf.count = buf.count + 1;
+};
+
+export fn util_light_buffer_slice(buf: *E2LightBuffer) []Light = {
+	return buf.lights[0z..(buf.count: size)];
+};
