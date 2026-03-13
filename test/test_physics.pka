@@ -1,6 +1,7 @@
 // test_physics.pka — Verify MuJoCo physics stepping via the C shim.
 // Loads ball.xml, steps physics, checks that the sphere falls under gravity.
 
+use fb;
 use fmt;
 
 export fn main() void = {

@@ -9,6 +9,8 @@ mujoco_extra = $mujoco_dir/build/lib/libtinyxml2.a $mujoco_dir/build/lib/liblode
 
 # Libraries
 gl_libs = -lrt -lglfw -lGLESv2 -lEGL -lm -lpthread -ldl -lstdc++
+rose_inc = -I../rose/ros3/include -I../rose/mirage/include -I../rose/quicksand/include
+rose_libs = ../rose/ros3/build/ros3_so.o ../rose/mirage/build/libmirage.a ../rose/quicksand/build/libquicksand.a
 
 # Pollyn Engine sources vendored into trellis2/
 src_math3d = pollyn_engine/src/math3d.pka
@@ -41,8 +43,10 @@ src_scene = src/scene.pka
 src_depth_sensor = src/depth_sensor.pka
 src_camera_view = src/camera_view.pka
 src_main = src/main.pka
-src_roseviz_app = src/roseviz_app.pka
-src_roseviz_main = src/roseviz_main.pka
+src_roseviz_app = cmd/roseviz/roseviz_app.pka
+src_roseviz_main = cmd/roseviz/roseviz_main.pka
+src_roseviz_bridge = cmd/roseviz/roseviz_bridge.c
+src_roseviz_falling_ball = cmd/roseviz/roseviz_falling_ball.c
 
 # Same paths relative to compiler/ for pikacc command
 t2_math3d = ../trellis2/pollyn_engine/src/math3d.pka
@@ -67,14 +71,23 @@ t2_scene = ../trellis2/src/scene.pka
 t2_depth_sensor = ../trellis2/src/depth_sensor.pka
 t2_camera_view = ../trellis2/src/camera_view.pka
 t2_main = ../trellis2/src/main.pka
-t2_roseviz_app = ../trellis2/src/roseviz_app.pka
-t2_roseviz_main = ../trellis2/src/roseviz_main.pka
+t2_roseviz_app = ../trellis2/cmd/roseviz/roseviz_app.pka
+t2_roseviz_main = ../trellis2/cmd/roseviz/roseviz_main.pka
+t2_roseviz_bridge = ../trellis2/cmd/roseviz/roseviz_bridge.c
+t2_roseviz_falling_ball = ../trellis2/cmd/roseviz/roseviz_falling_ball.c
 t2_test_physics = ../trellis2/test/test_physics.pka
 t2_test_render = ../trellis2/test/test_render.pka
 t2_test_cv = ../trellis2/test/test_cv.pka
 t2_test_depth = ../trellis2/test/test_depth.pka
 t2_test_texture2d = ../trellis2/test/test_texture2d.pka
 t2_test_roseviz_ui = ../trellis2/test/test_roseviz_ui.pka
+t2_test_roseviz_bridge = ../trellis2/test/test_roseviz_bridge.pka
+t2_test_roseviz_palette = ../trellis2/test/test_roseviz_palette.pka
+t2_test_roseviz_sidebar = ../trellis2/test/test_roseviz_sidebar.pka
+t2_test_roseviz_decode = ../trellis2/test/test_roseviz_decode.pka
+t2_test_roseviz_layout = ../trellis2/test/test_roseviz_layout.pka
+t2_test_roseviz_tf = ../trellis2/test/test_roseviz_tf.pka
+t2_test_roseviz_sim = ../trellis2/test/test_roseviz_sim.pka
 t2_gl_shim = ../trellis2/pollyn_engine/shim/pollyn_shim.c
 t2_mj_shim = ../trellis2/shim/mujoco_shim.c
 
@@ -91,11 +104,23 @@ rule run
   command = cd /home/claude/source/pollyn2/trellis2 && $cmd && touch $out
   description = RUN $cmd
 
+rule ccbin
+  command = clang $cflags -o $out $in $libs
+  description = CC $out
+
 # --- Targets ---
 
 # Link order: static libs first, then system libs (for symbol resolution)
 all_libs = $mujoco_lib $mujoco_extra $gl_libs
-roseviz_libs = $gl_libs
+roseviz_libs = $rose_libs $gl_libs
+bridge_libs = $rose_libs -lrt -lm -lpthread -ldl
+
+build $builddir/.rose_deps.ok: run
+  cmd = make -C ../rose/mirage CC=clang && make -C ../rose/quicksand CC=clang && make -C ../rose/ros3 CC=clang build/ros3_so.o build/rosecore build/rosetopic build/test_visual_pub
+
+build $builddir/roseviz_falling_ball: ccbin $src_roseviz_falling_ball | $builddir/.rose_deps.ok
+  libs = $bridge_libs
+  cflags = $rose_inc -O3 -std=c11 -Wall -Wextra -Werror
 
 # Physics test
 build $builddir/test_physics: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco test/test_physics.pka $gl_shim $mj_shim
@@ -116,10 +141,10 @@ build $builddir/trellis2: pikacc $src_math3d $src_color $src_mesh $src_material 
   cflags = $mujoco_inc
 
 # Roseviz shell (images + point clouds only)
-build $builddir/roseviz: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_main $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag
-  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_main $t2_gl_shim
+build $builddir/roseviz: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_main $src_roseviz_bridge $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok $builddir/roseviz_falling_ball
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_main $t2_roseviz_bridge $t2_gl_shim
   libs = $roseviz_libs
-  cflags =
+  cflags = $rose_inc
 
 # --- Test runners ---
 
@@ -127,7 +152,7 @@ build $builddir/.test_physics.ok: run | $builddir/test_physics
   cmd = ./$builddir/test_physics
 
 build $builddir/.test_render.ok: run | $builddir/test_render
-  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_render
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" ./$builddir/test_render
 
 # CV test (needs GL via xvfb)
 build $builddir/test_cv: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene test/test_cv.pka $gl_shim $mj_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag
@@ -136,7 +161,7 @@ build $builddir/test_cv: pikacc $src_math3d $src_color $src_mesh $src_material $
   cflags = $mujoco_inc
 
 build $builddir/.test_cv.ok: run | $builddir/test_cv
-  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_cv
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" ./$builddir/test_cv
 
 # Depth sensor test (needs GL via xvfb)
 build $builddir/test_depth: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene $src_depth_sensor test/test_depth.pka $gl_shim $mj_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag
@@ -145,7 +170,7 @@ build $builddir/test_depth: pikacc $src_math3d $src_color $src_mesh $src_materia
   cflags = $mujoco_inc
 
 build $builddir/.test_depth.ok: run | $builddir/test_depth
-  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_depth
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" ./$builddir/test_depth
 
 # 2D texture test (needs GL via xvfb)
 build $builddir/test_texture2d: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene $src_depth_sensor $src_camera_view test/test_texture2d.pka $gl_shim $mj_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag
@@ -154,16 +179,51 @@ build $builddir/test_texture2d: pikacc $src_math3d $src_color $src_mesh $src_mat
   cflags = $mujoco_inc
 
 build $builddir/.test_texture2d.ok: run | $builddir/test_texture2d
-  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_texture2d
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" ./$builddir/test_texture2d
 
 # Roseviz UI test (headless)
-build $builddir/test_roseviz_ui: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app test/test_roseviz_ui.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag
-  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_test_roseviz_ui $t2_gl_shim
+build $builddir/test_roseviz_ui: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_bridge test/test_roseviz_ui.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_bridge $t2_test_roseviz_ui $t2_gl_shim
   libs = $roseviz_libs
-  cflags =
+  cflags = $rose_inc
 
 build $builddir/.test_roseviz_ui.ok: run | $builddir/test_roseviz_ui
-  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -s "-screen 0 640x480x24" ./$builddir/test_roseviz_ui
+  cmd = LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" ./$builddir/test_roseviz_ui
+
+build $builddir/test_roseviz_bridge: pikacc $src_roseviz_bridge test/test_roseviz_bridge.pka | $builddir/.rose_deps.ok
+  srcs = $t2_roseviz_bridge $t2_test_roseviz_bridge
+  libs = $bridge_libs
+  cflags = $rose_inc
+
+build $builddir/test_roseviz_palette: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_bridge test/test_roseviz_palette.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_bridge $t2_test_roseviz_palette $t2_gl_shim
+  libs = $roseviz_libs
+  cflags = $rose_inc
+
+build $builddir/test_roseviz_sidebar: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_bridge test/test_roseviz_sidebar.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_bridge $t2_test_roseviz_sidebar $t2_gl_shim
+  libs = $roseviz_libs
+  cflags = $rose_inc
+
+build $builddir/test_roseviz_decode: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_bridge test/test_roseviz_decode.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_bridge $t2_test_roseviz_decode $t2_gl_shim
+  libs = $roseviz_libs
+  cflags = $rose_inc
+
+build $builddir/test_roseviz_layout: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_bridge test/test_roseviz_layout.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_bridge $t2_test_roseviz_layout $t2_gl_shim
+  libs = $roseviz_libs
+  cflags = $rose_inc
+
+build $builddir/test_roseviz_tf: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_bridge test/test_roseviz_tf.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_bridge $t2_test_roseviz_tf $t2_gl_shim
+  libs = $roseviz_libs
+  cflags = $rose_inc
+
+build $builddir/test_roseviz_sim: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_bridge test/test_roseviz_sim.pka $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok $builddir/roseviz_falling_ball
+  srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_bridge $t2_test_roseviz_sim $t2_gl_shim
+  libs = $roseviz_libs
+  cflags = $rose_inc
 
 # --- Phony targets ---
 
@@ -173,8 +233,16 @@ build test_cv: phony $builddir/test_cv
 build test_depth: phony $builddir/test_depth
 build test_texture2d: phony $builddir/test_texture2d
 build test_roseviz_ui: phony $builddir/test_roseviz_ui
+build test_roseviz_bridge: phony $builddir/test_roseviz_bridge
+build test_roseviz_palette: phony $builddir/test_roseviz_palette
+build test_roseviz_sidebar: phony $builddir/test_roseviz_sidebar
+build test_roseviz_decode: phony $builddir/test_roseviz_decode
+build test_roseviz_layout: phony $builddir/test_roseviz_layout
+build test_roseviz_tf: phony $builddir/test_roseviz_tf
+build test_roseviz_sim: phony $builddir/test_roseviz_sim
 build trellis2: phony $builddir/trellis2
 build roseviz: phony $builddir/roseviz
+build roseviz_falling_ball: phony $builddir/roseviz_falling_ball
 build check: phony $builddir/.test_physics.ok $builddir/.test_render.ok $builddir/.test_cv.ok $builddir/.test_depth.ok $builddir/.test_texture2d.ok $builddir/.test_roseviz_ui.ok
 
 default trellis2

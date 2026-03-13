@@ -20,50 +20,6 @@
 extern int64_t clock_TimeNS(void) __attribute__((weak));
 
 /* ================================================================
- * COMMAND-LINE ARGUMENT CHECK (works without GL)
- * Reads /proc/self/cmdline to check for a flag.
- * ================================================================ */
-
-int shim_has_arg(unsigned char *flag) {
-    FILE *f = fopen("/proc/self/cmdline", "r");
-    if (!f) return 0;
-    char buf[4096];
-    int n = (int)fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    buf[n] = 0;
-    int pos = 0;
-    while (pos < n) {
-        if (strcmp(&buf[pos], (const char *)flag) == 0) return 1;
-        pos += (int)strlen(&buf[pos]) + 1;
-    }
-    return 0;
-}
-
-/* Return the first positional (non-flag) CLI argument.
- * Copies into out, returns length (0 = none found). */
-int shim_get_file_arg(unsigned char *out, int max_len) {
-    FILE *f = fopen("/proc/self/cmdline", "r");
-    if (!f) return 0;
-    char buf[4096];
-    int n = (int)fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    buf[n] = 0;
-    int pos = 0, idx = 0;
-    while (pos < n) {
-        int len = (int)strlen(&buf[pos]);
-        if (idx > 0 && !(buf[pos] == '-' && buf[pos+1] == '-')) {
-            if (len >= max_len) len = max_len - 1;
-            memcpy(out, &buf[pos], (size_t)len);
-            out[len] = 0;
-            return len;
-        }
-        pos += len + 1;
-        idx++;
-    }
-    return 0;
-}
-
-/* ================================================================
  * MONOTONIC CLOCK (works without GL)
  * ================================================================ */
 

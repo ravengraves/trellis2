@@ -1,33 +1,29 @@
 // main.pka — Trellis2 MuJoCo viewer in Pika + Pollyn Engine.
 // Usage: trellis2 [--terminal] [--half-cell] [--term-lines] model.xml
 
+use args;
+use fb;
 use fmt;
 use clock;
-
-@symbol("shim_has_arg") fn shim_has_arg(flag: *u8) i32;
-@symbol("shim_get_file_arg") fn shim_get_file_arg(out: *u8, max_len: i32) i32;
+use strings;
 
 export fn main() void = {
 	// Parse CLI flags
-	let term_flag: [11]u8 = ['-', '-', 't', 'e', 'r', 'm', 'i', 'n', 'a', 'l', 0];
-	let half_cell_flag: [12]u8 = ['-', '-', 'h', 'a', 'l', 'f', '-', 'c', 'e', 'l', 'l', 0];
-	let term_lines_flag: [13]u8 = ['-', '-', 't', 'e', 'r', 'm', '-', 'l', 'i', 'n', 'e', 's', 0];
-
 	let mode = E2_MODE_WINDOW;
-	if (shim_has_arg(&term_flag[0z]) != 0) {
+	if (args::Has("--terminal")) {
 		mode = E2_MODE_TERMINAL;
 	};
 
 	// Get model path from CLI
-	let model_path: [512]u8 = [0...];
-	let path_len = shim_get_file_arg(&model_path[0z], 512);
-	if (path_len <= 0) {
+	let model_path = args::FirstPositional();
+	if (model_path == "") {
 		fmt::Printsln("usage: trellis2 [--terminal] model.xml");
 		return;
 	};
 
 	// Load MuJoCo model
-	if (mj_shim_load(&model_path[0z]) != 0) {
+	let model_path_u8 = strings::toutf8(model_path);
+	if (mj_shim_load(model_path_u8.data) != 0) {
 		fmt::Printsln("failed to load model");
 		return;
 	};
@@ -42,10 +38,10 @@ export fn main() void = {
 
 	// Init engine
 	let rt = e2_runtime_init(mode, 800, 600);
-	if (shim_has_arg(&half_cell_flag[0z]) != 0) {
+	if (args::Has("--half-cell")) {
 		rt.term_style = E2_TERM_HALF_CELL;
 	};
-	if (shim_has_arg(&term_lines_flag[0z]) != 0) {
+	if (args::Has("--term-lines")) {
 		rt.term_present_mode = E2_TERM_PRESENT_LINES;
 	};
 	rt.target_fps = 30;

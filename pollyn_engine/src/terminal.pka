@@ -2,7 +2,6 @@
 // Software rasterizer → braille character output via ANSI true-color.
 
 use math;
-use fmt;
 use strings;
 
 // C shim terminal functions

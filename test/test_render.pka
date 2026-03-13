@@ -1,6 +1,7 @@
 // test_render.pka — Verify MuJoCo scene rendering via Pollyn Engine.
 // Loads ball.xml, inits engine headless, renders one frame, checks pixels.
 
+use fb;
 use fmt;
 
 fn count_nonblack_rgb(pixels: []u8) i32 = {

@@ -1,5 +1,6 @@
 // util_text.pka — Text helpers for engine.
 
+use fb;
 use fmt;
 
 export fn util_text_add_fps(rt: *E2Runtime, frame_ms: f64,

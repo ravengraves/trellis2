@@ -7,6 +7,7 @@
 //   4. Ball settles near ground level after many physics steps
 //   5. Region color at each object centroid matches model spec
 
+use fb;
 use fmt;
 
 // --- Centroid helpers: weighted center of color-dominant pixels ---

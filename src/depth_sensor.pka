@@ -2,8 +2,6 @@
 // Renders linearized depth from an arbitrary camera pose via the engine's
 // offscreen depth pass. Output is world-space distance (camera Z) per pixel.
 
-use fmt;
-
 export def DSENS_MAX_W: i32 = 128;
 export def DSENS_MAX_H: i32 = 96;
 def DSENS_MAX_PIXELS: size = 12288z;  // 128 * 96

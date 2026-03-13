@@ -1,0 +1,65 @@
+use fb;
+use proc;
+use strings;
+
+fn topic_equals(buf: []u8, n: i32, s: str) bool = {
+	return strings::fromutf8_unsafe(buf[0z..(n: size)]) == s;
+};
+
+fn find_topic_index(name: str) i32 = {
+	let temp: [ROSEVIZ_TOPIC_NAME_BYTES]u8 = [0...];
+	for (let i: i32 = 0; i < roseviz_bridge_topic_count(); i += 1) {
+		let n = roseviz_bridge_topic_name(i, &temp[0z], 256);
+		if (n > 0 && topic_equals(temp[0z..ROSEVIZ_TOPIC_NAME_BYTES], n, name)) {
+			return i;
+		};
+	};
+	return -1;
+};
+
+fn seed_basic_workspace(app: *RosevizApp) void = {
+	app.workspaces[0z].root = 0;
+	app.workspaces[0z].focus_leaf = 1;
+	app.workspaces[0z].tile_count = 2;
+	app.workspaces[0z].tiles[0z].kind = ROSEVIZ_TILE_IMAGE;
+	app.workspaces[0z].tiles[0z].enabled = true;
+	app.workspaces[0z].tiles[1z].kind = ROSEVIZ_TILE_POINTS;
+	app.workspaces[0z].tiles[1z].enabled = true;
+	app.workspaces[0z].nodes[0z] = RosevizNode { live = true, parent = -1, left = 1, right = 2, split_axis = ROSEVIZ_SPLIT_HORIZONTAL, ratio_milli = 550, tile_index = -1 };
+	app.workspaces[0z].nodes[1z] = RosevizNode { live = true, parent = 0, left = -1, right = -1, split_axis = ROSEVIZ_SPLIT_NONE, ratio_milli = 500, tile_index = 0 };
+	app.workspaces[0z].nodes[2z] = RosevizNode { live = true, parent = 0, left = -1, right = -1, split_axis = ROSEVIZ_SPLIT_NONE, ratio_milli = 500, tile_index = 1 };
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_roseviz_sidebar ===");
+	assert(roseviz_bridge_init() != 0, "bridge init");
+
+	for (let i: i32 = 0; i < 120; i += 1) {
+		roseviz_bridge_poll();
+		if (roseviz_bridge_topic_count() >= 4) {
+			break;
+		};
+		proc::MilliSleep(25);
+	};
+	assert(roseviz_bridge_topic_count() >= 4, "topic catalog");
+
+	let app = roseviz_app_zero();
+	seed_basic_workspace(&app);
+	app.focus_area = ROSEVIZ_FOCUS_SIDEBAR;
+	app.sidebar_topic_selected = find_topic_index("/demo/camera/front");
+	assert(app.sidebar_topic_selected >= 0, "camera topic found");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 1280, 800);
+	rt.input.event_count = 1;
+	rt.input.events[0z] = InputEvent { etype = EVT_KEY_PRESS, key = KEY_SPACE, mods = 0, x = 0.0, y = 0.0 };
+	roseviz_handle_input(&app, &rt);
+	assert(topic_equals(app.workspaces[0z].tiles[0z].topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], app.workspaces[0z].tiles[0z].topic_len, "/demo/camera/front"), "space binds sidebar topic");
+	assert(app.workspaces[0z].tiles[0z].slot >= 0, "image slot bound");
+
+	roseviz_handle_input(&app, &rt);
+	assert(app.workspaces[0z].tiles[0z].topic_len == 0, "space unbinds sidebar topic");
+	assert(app.workspaces[0z].tiles[0z].slot == -1, "image slot cleared");
+
+	roseviz_bridge_shutdown();
+	fb::Printsln("=== test_roseviz_sidebar passed ===");
+};

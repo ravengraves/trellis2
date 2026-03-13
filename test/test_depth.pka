@@ -1,5 +1,6 @@
 // test_depth.pka — Depth sensor tests for MuJoCo scene rendering.
 
+use fb;
 use fmt;
 
 export fn main() void = {

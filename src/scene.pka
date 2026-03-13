@@ -1,8 +1,6 @@
 // scene.pka — Maps MuJoCo geoms to Pollyn Engine render data.
 // Uses a Scene struct allocated by the caller (no module-level state).
 
-use fmt;
-
 export def MAX_GEOMS: size = 256z;
 
 export type Scene = struct {

@@ -1,0 +1,1750 @@
+// roseviz_app.pka — Minimal roseviz shell for images, point clouds, and basic TF overlays.
+
+use fb;
+use math;
+use strings;
+
+@symbol("roseviz_bridge_init") fn roseviz_bridge_init() i32;
+@symbol("roseviz_bridge_shutdown") fn roseviz_bridge_shutdown() void;
+@symbol("roseviz_bridge_poll") fn roseviz_bridge_poll() void;
+@symbol("roseviz_bridge_track_topic") fn roseviz_bridge_track_topic(topic: *u8) i32;
+@symbol("roseviz_bridge_topic_count") fn roseviz_bridge_topic_count() i32;
+@symbol("roseviz_bridge_topic_name") fn roseviz_bridge_topic_name(index: i32, out: *u8, out_size: i32) i32;
+@symbol("roseviz_bridge_slot_payload_size") fn roseviz_bridge_slot_payload_size(slot: i32) i32;
+@symbol("roseviz_bridge_slot_status") fn roseviz_bridge_slot_status(slot: i32) i32;
+@symbol("roseviz_bridge_slot_seq") fn roseviz_bridge_slot_seq(slot: i32) u64;
+@symbol("roseviz_bridge_decode_slot_image_rgb") fn roseviz_bridge_decode_slot_image_rgb(
+	slot: i32, out_rgb: *u8, max_bytes: i32, out_w: *i32, out_h: *i32, out_channels: *i32) i32;
+@symbol("roseviz_bridge_decode_slot_points_xyz") fn roseviz_bridge_decode_slot_points_xyz(
+	slot: i32, out_xyz: *f32, max_points: i32) i32;
+@symbol("roseviz_bridge_decode_slot_transforms") fn roseviz_bridge_decode_slot_transforms(
+	slot: i32, out_tf: *f32, max_edges: i32) i32;
+@symbol("roseviz_bridge_publish_command") fn roseviz_bridge_publish_command(topic: *u8, cmd: *u8) i32;
+
+def ROSEVIZ_TAB_COUNT: i32 = 11;
+def ROSEVIZ_TAB_ALL: i32 = 10;
+def ROSEVIZ_TAB_COUNT_Z: size = 11z;
+
+def ROSEVIZ_MAX_TILES: i32 = 4;
+def ROSEVIZ_MAX_NODES: i32 = 7;
+def ROSEVIZ_MAX_TRANSFORMS: i32 = 64;
+def ROSEVIZ_MAX_TILES_Z: size = 4z;
+def ROSEVIZ_MAX_NODES_Z: size = 7z;
+def ROSEVIZ_MAX_TRANSFORMS_Z: size = 64z;
+
+def ROSEVIZ_TILE_NONE: i32 = 0;
+def ROSEVIZ_TILE_IMAGE: i32 = 1;
+def ROSEVIZ_TILE_POINTS: i32 = 2;
+
+def ROSEVIZ_SPLIT_NONE: i32 = 0;
+def ROSEVIZ_SPLIT_VERTICAL: i32 = 1;
+def ROSEVIZ_SPLIT_HORIZONTAL: i32 = 2;
+
+def ROSEVIZ_FOCUS_TILES: i32 = 0;
+def ROSEVIZ_FOCUS_SIDEBAR: i32 = 1;
+
+def ROSEVIZ_ERR_NONE: i32 = 0;
+def ROSEVIZ_ERR_BIND: i32 = 1;
+def ROSEVIZ_ERR_DESER: i32 = 2;
+def ROSEVIZ_ERR_DECODE: i32 = 3;
+def ROSEVIZ_ERR_TF_MISSING_PARENT: i32 = 4;
+def ROSEVIZ_ERR_TF_CYCLE: i32 = 5;
+
+def ROSEVIZ_KEY_0: i32 = 48;
+def ROSEVIZ_KEY_1: i32 = 49;
+def ROSEVIZ_KEY_2: i32 = 50;
+def ROSEVIZ_KEY_3: i32 = 51;
+def ROSEVIZ_KEY_4: i32 = 52;
+def ROSEVIZ_KEY_5: i32 = 53;
+def ROSEVIZ_KEY_6: i32 = 54;
+def ROSEVIZ_KEY_7: i32 = 55;
+def ROSEVIZ_KEY_8: i32 = 56;
+def ROSEVIZ_KEY_9: i32 = 57;
+def ROSEVIZ_KEY_H: i32 = 72;
+def ROSEVIZ_KEY_P: i32 = 80;
+def ROSEVIZ_KEY_V: i32 = 86;
+def ROSEVIZ_KEY_X: i32 = 88;
+def ROSEVIZ_KEY_TAB: i32 = 258;
+def ROSEVIZ_KEY_BACKSPACE: i32 = 259;
+def ROSEVIZ_MOD_CONTROL: i32 = 2;
+
+def ROSEVIZ_SIDEBAR_W: i32 = 240;
+def ROSEVIZ_BOTTOM_H: i32 = 30;
+def ROSEVIZ_GAP: i32 = 8;
+def ROSEVIZ_TAB_W: i32 = 28;
+def ROSEVIZ_TAB_ALL_W: i32 = 40;
+def ROSEVIZ_TAB_GAP: i32 = 4;
+def ROSEVIZ_SIDEBAR_ROWS: i32 = 8;
+
+def ROSEVIZ_DEMO_IMAGE_W: i32 = 48;
+def ROSEVIZ_DEMO_IMAGE_H: i32 = 32;
+def ROSEVIZ_IMAGE_MAX_W: i32 = 512;
+def ROSEVIZ_IMAGE_MAX_H: i32 = 512;
+def ROSEVIZ_IMAGE_RGB: size = 786432z;
+def ROSEVIZ_IMAGE_RGB_ALL: size = 3145728z;
+
+def ROSEVIZ_POINT_MAX: i32 = 8192;
+def ROSEVIZ_POINT_XYZ: size = 24576z;
+def ROSEVIZ_POINT_XYZ_ALL: size = 98304z;
+
+def ROSEVIZ_CLOUD_RT_W: i32 = 320;
+def ROSEVIZ_CLOUD_RT_H: i32 = 180;
+def ROSEVIZ_CLOUD_PIXELS: size = 57600z;
+def ROSEVIZ_CLOUD_PIXELS_ALL: size = 230400z;
+def ROSEVIZ_CLOUD_RGB: size = 172800z;
+def ROSEVIZ_CLOUD_RGB_ALL: size = 691200z;
+
+def ROSEVIZ_TOPIC_NAME_BYTES: size = 256z;
+def ROSEVIZ_DESER_BYTES: size = 32z;
+def ROSEVIZ_PALETTE_QUERY_BYTES: size = 64z;
+def ROSEVIZ_MATCH_MAX: i32 = 5;
+def ROSEVIZ_MATCH_BYTES: size = 1280z;
+def ROSEVIZ_TF_RAW: size = 320z;
+def ROSEVIZ_MATCH_MAX_Z: size = 5z;
+
+export type RosevizRect = struct {
+	x: i32,
+	y: i32,
+	w: i32,
+	h: i32,
+};
+
+export type RosevizNode = struct {
+	live: bool,
+	parent: i32,
+	left: i32,
+	right: i32,
+	split_axis: i32,
+	ratio_milli: i32,
+	tile_index: i32,
+};
+
+export type RosevizTile = struct {
+	kind: i32,
+	enabled: bool,
+	slot: i32,
+	seq: u64,
+	error_code: i32,
+	topic_len: i32,
+	deser_len: i32,
+	update_count: i32,
+	render_count: i32,
+	topic: [ROSEVIZ_TOPIC_NAME_BYTES]u8,
+	deser: [ROSEVIZ_DESER_BYTES]u8,
+	cam: Camera,
+};
+
+export type RosevizWorkspace = struct {
+	root: i32,
+	focus_leaf: i32,
+	tile_count: i32,
+	nodes: [ROSEVIZ_MAX_NODES_Z]RosevizNode,
+	tiles: [ROSEVIZ_MAX_TILES_Z]RosevizTile,
+};
+
+export type RosevizApp = struct {
+	selected_tab: i32,
+	focus_area: i32,
+	sidebar_topic_selected: i32,
+	sidebar_topic_offset: i32,
+	palette_open: bool,
+	palette_topic_mode: bool,
+	deser_edit: bool,
+	palette_query_len: i32,
+	palette_query: [ROSEVIZ_PALETTE_QUERY_BYTES]u8,
+	palette_match_count: i32,
+	palette_selected: i32,
+	palette_match_lens: [ROSEVIZ_MATCH_MAX_Z]i32,
+	palette_match_scores: [ROSEVIZ_MATCH_MAX_Z]i32,
+	palette_match_names: [ROSEVIZ_MATCH_BYTES]u8,
+	tf_slot: i32,
+	tf_seq: u64,
+	tf_error_code: i32,
+	tf_topic_len: i32,
+	tf_topic: [ROSEVIZ_TOPIC_NAME_BYTES]u8,
+	tf_raw_count: i32,
+	tf_raw: [ROSEVIZ_TF_RAW]f32,
+	tf_lines: E2GpuColorBuffer,
+	tf_line_count: i32,
+	sim_active: bool,
+	sim_running: bool,
+	sim_cmd_topic_len: i32,
+	sim_cmd_topic: [ROSEVIZ_TOPIC_NAME_BYTES]u8,
+	workspaces: [ROSEVIZ_TAB_COUNT_Z]RosevizWorkspace,
+	cache_image_w: [ROSEVIZ_MAX_TILES_Z]i32,
+	cache_image_h: [ROSEVIZ_MAX_TILES_Z]i32,
+	cache_image_tex: [ROSEVIZ_MAX_TILES_Z]E2GpuTexture,
+	cache_image_rgb: [ROSEVIZ_IMAGE_RGB_ALL]u8,
+	cache_image_ready: [ROSEVIZ_MAX_TILES_Z]bool,
+	cache_cloud_tex: [ROSEVIZ_MAX_TILES_Z]E2GpuTexture,
+	cache_cloud_rgb: [ROSEVIZ_CLOUD_RGB_ALL]u8,
+	cache_cloud_depth: [ROSEVIZ_CLOUD_PIXELS_ALL]f32,
+	cache_cloud_ready: [ROSEVIZ_MAX_TILES_Z]bool,
+	cache_cloud_xyz: [ROSEVIZ_POINT_XYZ_ALL]f32,
+	cache_cloud_point_count: [ROSEVIZ_MAX_TILES_Z]i32,
+	cache_cloud_points: [ROSEVIZ_MAX_TILES_Z]E2GpuColorBuffer,
+};
+
+fn roseviz_empty_rect() RosevizRect = {
+	return RosevizRect { x = 0, y = 0, w = 0, h = 0 };
+};
+
+fn roseviz_empty_node() RosevizNode = {
+	return RosevizNode {
+		live = false,
+		parent = -1,
+		left = -1,
+		right = -1,
+		split_axis = ROSEVIZ_SPLIT_NONE,
+		ratio_milli = 500,
+		tile_index = -1,
+	};
+};
+
+fn roseviz_empty_tile() RosevizTile = {
+	return RosevizTile {
+		kind = ROSEVIZ_TILE_NONE,
+		enabled = false,
+		slot = -1,
+		seq = 0u64,
+		error_code = ROSEVIZ_ERR_NONE,
+		topic_len = 0,
+		deser_len = 0,
+		update_count = 0,
+		render_count = 0,
+		topic = [0...],
+		deser = [0...],
+		cam = camera_default(),
+	};
+};
+
+fn roseviz_empty_workspace() RosevizWorkspace = {
+	return RosevizWorkspace {
+		root = -1,
+		focus_leaf = -1,
+		tile_count = 0,
+		nodes = [roseviz_empty_node()...],
+		tiles = [roseviz_empty_tile()...],
+	};
+};
+
+export fn roseviz_app_zero() RosevizApp = {
+	return RosevizApp {
+		selected_tab = 0,
+		focus_area = ROSEVIZ_FOCUS_TILES,
+		sidebar_topic_selected = 0,
+		sidebar_topic_offset = 0,
+		palette_open = false,
+		palette_topic_mode = false,
+		deser_edit = false,
+		palette_query_len = 0,
+		palette_query = [0...],
+		palette_match_count = 0,
+		palette_selected = 0,
+		palette_match_lens = [0...],
+		palette_match_scores = [0...],
+		palette_match_names = [0...],
+		tf_slot = -1,
+		tf_seq = 0u64,
+		tf_error_code = ROSEVIZ_ERR_NONE,
+		tf_topic_len = 0,
+		tf_topic = [0...],
+		tf_raw_count = 0,
+		tf_raw = [0.0...],
+		tf_lines = E2GpuColorBuffer { vbo = 0u32, vertex_count = 0, valid = false },
+		tf_line_count = 0,
+		sim_active = false,
+		sim_running = false,
+		sim_cmd_topic_len = 0,
+		sim_cmd_topic = [0...],
+		workspaces = [roseviz_empty_workspace()...],
+		cache_image_w = [0...],
+		cache_image_h = [0...],
+		cache_image_tex = [E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false }...],
+		cache_image_rgb = [0...],
+		cache_image_ready = [false...],
+		cache_cloud_tex = [E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false }...],
+		cache_cloud_rgb = [0...],
+		cache_cloud_depth = [0.0...],
+		cache_cloud_ready = [false...],
+		cache_cloud_xyz = [0.0...],
+		cache_cloud_point_count = [0...],
+		cache_cloud_points = [E2GpuColorBuffer { vbo = 0u32, vertex_count = 0, valid = false }...],
+	};
+};
+
+fn roseviz_window_dims(rt: *E2Runtime, out_w: *i32, out_h: *i32) void = {
+	if (rt.mode == E2_MODE_WINDOW) {
+		*out_w = shim_window_width();
+		*out_h = shim_window_height();
+	} else {
+		*out_w = rt.fb.width;
+		*out_h = rt.fb.height;
+	};
+};
+
+fn roseviz_sidebar_rect(wh: i32) RosevizRect = {
+	return RosevizRect {
+		x = 0,
+		y = 0,
+		w = ROSEVIZ_SIDEBAR_W,
+		h = wh - ROSEVIZ_BOTTOM_H
+	};
+};
+
+fn roseviz_bottom_rect(ww: i32, wh: i32) RosevizRect = {
+	return RosevizRect {
+		x = 0,
+		y = wh - ROSEVIZ_BOTTOM_H,
+		w = ww,
+		h = ROSEVIZ_BOTTOM_H
+	};
+};
+
+fn roseviz_main_rect(ww: i32, wh: i32) RosevizRect = {
+	let x = ROSEVIZ_SIDEBAR_W + ROSEVIZ_GAP;
+	return RosevizRect {
+		x = x,
+		y = ROSEVIZ_GAP,
+		w = ww - x - ROSEVIZ_GAP,
+		h = wh - ROSEVIZ_BOTTOM_H - ROSEVIZ_GAP * 2,
+	};
+};
+
+fn roseviz_tab_rect(tab: i32, wh: i32) RosevizRect = {
+	let x = 8 + tab * (ROSEVIZ_TAB_W + ROSEVIZ_TAB_GAP);
+	return RosevizRect {
+		x = x,
+		y = wh - ROSEVIZ_BOTTOM_H + 4,
+		w = ROSEVIZ_TAB_W,
+		h = ROSEVIZ_BOTTOM_H - 8
+	};
+};
+
+fn roseviz_tab_all_rect(wh: i32) RosevizRect = {
+	let x = 8 + 10 * (ROSEVIZ_TAB_W + ROSEVIZ_TAB_GAP);
+	return RosevizRect {
+		x = x,
+		y = wh - ROSEVIZ_BOTTOM_H + 4,
+		w = ROSEVIZ_TAB_ALL_W,
+		h = ROSEVIZ_BOTTOM_H - 8
+	};
+};
+
+fn roseviz_add_rect(buf: *E2CpuColorVertexBuffer,
+	x: i32, y: i32, w: i32, h: i32, c: Color) void = {
+	if (w <= 0 || h <= 0) { return; };
+	let p0 = vec3_new(x: f32, y: f32, 0.0);
+	let p1 = vec3_new((x + w): f32, y: f32, 0.0);
+	let p2 = vec3_new((x + w): f32, (y + h): f32, 0.0);
+	let p3 = vec3_new(x: f32, (y + h): f32, 0.0);
+	util_cpu_color_buffer_add_tri(buf, p0, p1, p2, c);
+	util_cpu_color_buffer_add_tri(buf, p0, p2, p3, c);
+};
+
+fn roseviz_add_outline(buf: *E2CpuColorVertexBuffer,
+	x: i32, y: i32, w: i32, h: i32, c: Color) void = {
+	if (w <= 1 || h <= 1) { return; };
+	let p0 = vec3_new(x: f32, y: f32, 0.0);
+	let p1 = vec3_new((x + w): f32, y: f32, 0.0);
+	let p2 = vec3_new((x + w): f32, (y + h): f32, 0.0);
+	let p3 = vec3_new(x: f32, (y + h): f32, 0.0);
+	util_cpu_color_buffer_add_line(buf, p0, p1, c);
+	util_cpu_color_buffer_add_line(buf, p1, p2, c);
+	util_cpu_color_buffer_add_line(buf, p2, p3, c);
+	util_cpu_color_buffer_add_line(buf, p3, p0, c);
+};
+
+fn roseviz_tile_name(kind: i32) str = {
+	if (kind == ROSEVIZ_TILE_IMAGE) { return "Image"; };
+	if (kind == ROSEVIZ_TILE_POINTS) { return "PointCloud"; };
+	return "Empty";
+};
+
+fn roseviz_error_name(code: i32) str = {
+	if (code == ROSEVIZ_ERR_NONE) { return "ok"; };
+	if (code == ROSEVIZ_ERR_BIND) { return "bind error"; };
+	if (code == ROSEVIZ_ERR_DESER) { return "deserialize error"; };
+	if (code == ROSEVIZ_ERR_DECODE) { return "decode error"; };
+	if (code == ROSEVIZ_ERR_TF_MISSING_PARENT) { return "tf missing parent"; };
+	if (code == ROSEVIZ_ERR_TF_CYCLE) { return "tf cycle"; };
+	return "error";
+};
+
+fn roseviz_topic_len(buf: []u8) i32 = {
+	let n: i32 = 0;
+	for ((n: size) < buf.len) {
+		if (buf[n: size] == 0u8) { break; };
+		n = n + 1;
+	};
+	return n;
+};
+
+fn roseviz_topic_str(buf: []u8, n: i32) str = {
+	return strings::fromutf8_unsafe(buf[0z..(n: size)]);
+};
+
+fn roseviz_copy_topic(dst: []u8, src: []u8, src_len: i32) i32 = {
+	let n = src_len;
+	if ((n: size) >= dst.len) {
+		n = (dst.len - 1z): i32;
+	};
+	for (let i: i32 = 0; i < n; i += 1) {
+		dst[i: size] = src[i: size];
+	};
+	dst[n: size] = 0u8;
+	return n;
+};
+
+fn roseviz_topic_equals(a: []u8, a_len: i32, b: []u8, b_len: i32) bool = {
+	if (a_len != b_len) { return false; };
+	for (let i: i32 = 0; i < a_len; i += 1) {
+		if (a[i: size] != b[i: size]) { return false; };
+	};
+	return true;
+};
+
+fn roseviz_key_press_nomod(rt: *E2Runtime, key: i32) bool = {
+	for (let i: i32 = 0; i < rt.input.event_count; i += 1) {
+		let ev = rt.input.events[i: size];
+		if (ev.etype == EVT_KEY_PRESS && ev.key == key && (ev.mods & ROSEVIZ_MOD_CONTROL) == 0) {
+			return true;
+		};
+	};
+	return false;
+};
+
+fn roseviz_lower_ascii(ch: u8) u8 = {
+	if (ch >= 65u8 && ch <= 90u8) {
+		return ch + 32u8;
+	};
+	return ch;
+};
+
+fn roseviz_fuzzy_score(query: []u8, qlen: i32, cand: []u8, clen: i32) i32 = {
+	if (qlen <= 0) {
+		return 1;
+	};
+	let qi: i32 = 0;
+	let score: i32 = 0;
+	for (let ci: i32 = 0; ci < clen; ci += 1) {
+		if (qi >= qlen) { break; };
+		let qc = roseviz_lower_ascii(query[qi: size]);
+		let cc = roseviz_lower_ascii(cand[ci: size]);
+		if (qc == cc) {
+			score = score + 10;
+			if (qi == ci) {
+				score = score + 4;
+			};
+			qi = qi + 1;
+		};
+	};
+	if (qi != qlen) {
+		return -1;
+	};
+	return score - clen;
+};
+
+fn roseviz_palette_name_slice(app: *RosevizApp, idx: i32) []u8 = {
+	let start: size = (idx * 256): size;
+	return app.palette_match_names[start..(start + 256z)];
+};
+
+fn roseviz_image_rgb_slice(app: *RosevizApp, tile_idx: i32) []u8 = {
+	let start: size = (tile_idx: size) * ROSEVIZ_IMAGE_RGB;
+	return app.cache_image_rgb[start..(start + ROSEVIZ_IMAGE_RGB)];
+};
+
+fn roseviz_cloud_rgb_slice(app: *RosevizApp, tile_idx: i32) []u8 = {
+	let start: size = (tile_idx: size) * ROSEVIZ_CLOUD_RGB;
+	return app.cache_cloud_rgb[start..(start + ROSEVIZ_CLOUD_RGB)];
+};
+
+fn roseviz_cloud_depth_slice(app: *RosevizApp, tile_idx: i32) []f32 = {
+	let start: size = (tile_idx: size) * ROSEVIZ_CLOUD_PIXELS;
+	return app.cache_cloud_depth[start..(start + ROSEVIZ_CLOUD_PIXELS)];
+};
+
+fn roseviz_cloud_xyz_slice(app: *RosevizApp, tile_idx: i32) []f32 = {
+	let start: size = (tile_idx: size) * ROSEVIZ_POINT_XYZ;
+	return app.cache_cloud_xyz[start..(start + ROSEVIZ_POINT_XYZ)];
+};
+
+fn roseviz_fill_demo_image(dst: []u8, tab: i32) void = {
+	for (let py: i32 = 0; py < ROSEVIZ_DEMO_IMAGE_H; py += 1) {
+		for (let px: i32 = 0; px < ROSEVIZ_DEMO_IMAGE_W; px += 1) {
+			let idx: size = ((py * ROSEVIZ_DEMO_IMAGE_W + px) * 3): size;
+			let rr: i32 = (px * 255) / ROSEVIZ_DEMO_IMAGE_W;
+			let gg: i32 = (py * 255) / ROSEVIZ_DEMO_IMAGE_H;
+			let bb: i32 = ((px + py + tab * 17) * 255) / (ROSEVIZ_DEMO_IMAGE_W + ROSEVIZ_DEMO_IMAGE_H);
+			if (((px / 8) + (py / 8) + tab) % 2 == 0) {
+				rr = rr + 64;
+				bb = bb + 48;
+			};
+			if (rr > 255) { rr = 255; };
+			if (gg > 255) { gg = 255; };
+			if (bb > 255) { bb = 255; };
+			dst[idx] = rr: u8;
+			dst[idx + 1z] = gg: u8;
+			dst[idx + 2z] = bb: u8;
+		};
+	};
+};
+
+fn roseviz_make_demo_cloud() E2GpuColorBuffer = {
+	let cpu = util_cpu_color_buffer_init();
+	for (let i: i32 = 0; i < 256; i += 1) {
+		let t = (i: f32) * 9.0;
+		let sc = math::sincos(t * (math::PI / 180.0));
+		let z = ((i % 32): f32 - 16.0) * 0.06;
+		let r = 0.25 + ((i % 5): f32) * 0.03;
+		let x = sc.c * r;
+		let y = sc.s * r;
+		let col = color_new(
+			0.92,
+			0.08 + ((i % 4): f32) * 0.02,
+			0.08 + ((i % 5): f32) * 0.02,
+			1.0);
+		util_cpu_color_buffer_add_point(&cpu, vec3_new(x, y, z), color_clamp(col));
+	};
+	return util_color_upload(&cpu);
+};
+
+fn roseviz_set_default_deser(tile: *RosevizTile) void = {
+	let deser_text: [19]u8 = ['f', 'i', 'r', 's', 't', '_', 'n', 'u', 'm', 'e', 'r', 'i', 'c', 'a', 'r', 'r', 'a', 'y', 0];
+	tile.deser_len = roseviz_copy_topic(tile.deser[0z..ROSEVIZ_DESER_BYTES], deser_text[0z..19z], 18);
+};
+
+fn roseviz_focus_tile_index(ws: *RosevizWorkspace) i32 = {
+	if (ws.focus_leaf < 0) {
+		return 0;
+	};
+	let node = ws.nodes[ws.focus_leaf: size];
+	if (node.tile_index < 0) {
+		return 0;
+	};
+	return node.tile_index;
+};
+
+fn roseviz_find_free_node(ws: *RosevizWorkspace) i32 = {
+	for (let i: i32 = 0; i < ROSEVIZ_MAX_NODES; i += 1) {
+		if (!ws.nodes[i: size].live) { return i; };
+	};
+	return -1;
+};
+
+fn roseviz_find_free_tile(ws: *RosevizWorkspace) i32 = {
+	for (let i: i32 = 0; i < ROSEVIZ_MAX_TILES; i += 1) {
+		if (ws.tiles[i: size].kind == ROSEVIZ_TILE_NONE) { return i; };
+	};
+	return -1;
+};
+
+fn roseviz_first_leaf(ws: *RosevizWorkspace, node_idx: i32) i32 = {
+	let stack: [ROSEVIZ_MAX_NODES_Z]i32 = [0...];
+	let sp: i32 = 0;
+	if (node_idx >= 0) {
+		stack[0z] = node_idx;
+		sp = 1;
+	};
+	for (sp > 0) {
+		sp = sp - 1;
+		let idx = stack[sp: size];
+		if (idx < 0) { continue; };
+		let node = ws.nodes[idx: size];
+		if (!node.live) { continue; };
+		if (node.split_axis == ROSEVIZ_SPLIT_NONE) {
+			return idx;
+		};
+		if (node.right >= 0 && sp < ROSEVIZ_MAX_NODES) {
+			stack[sp: size] = node.right;
+			sp = sp + 1;
+		};
+		if (node.left >= 0 && sp < ROSEVIZ_MAX_NODES) {
+			stack[sp: size] = node.left;
+			sp = sp + 1;
+		};
+	};
+	return -1;
+};
+
+fn roseviz_collect_leaf_nodes(ws: *RosevizWorkspace, node_idx: i32, out_nodes: []i32, out_count: *i32) void = {
+	let stack: [ROSEVIZ_MAX_NODES_Z]i32 = [0...];
+	let sp: i32 = 0;
+	if (node_idx >= 0) {
+		stack[0z] = node_idx;
+		sp = 1;
+	};
+	for (sp > 0 && *out_count < (out_nodes.len: i32)) {
+		sp = sp - 1;
+		let idx = stack[sp: size];
+		if (idx < 0) { continue; };
+		let node = ws.nodes[idx: size];
+		if (!node.live) { continue; };
+		if (node.split_axis == ROSEVIZ_SPLIT_NONE) {
+			out_nodes[*out_count: size] = idx;
+			*out_count = *out_count + 1;
+		} else {
+			if (node.right >= 0 && sp < ROSEVIZ_MAX_NODES) {
+				stack[sp: size] = node.right;
+				sp = sp + 1;
+			};
+			if (node.left >= 0 && sp < ROSEVIZ_MAX_NODES) {
+				stack[sp: size] = node.left;
+				sp = sp + 1;
+			};
+		};
+	};
+};
+
+fn roseviz_layout_collect(ws: *RosevizWorkspace,
+	node_idx: i32, rect: *RosevizRect,
+	out_nodes: []i32, out_rects: []RosevizRect, out_count: *i32) void = {
+	let node_stack: [ROSEVIZ_MAX_NODES_Z]i32 = [0...];
+	let rect_stack: [ROSEVIZ_MAX_NODES_Z]RosevizRect = [roseviz_empty_rect()...];
+	let sp: i32 = 0;
+	if (node_idx >= 0) {
+		node_stack[0z] = node_idx;
+		rect_stack[0z] = *rect;
+		sp = 1;
+	};
+	for (sp > 0 && *out_count < (out_nodes.len: i32)) {
+		sp = sp - 1;
+		let idx = node_stack[sp: size];
+		let cur_rect = rect_stack[sp: size];
+		if (idx < 0) { continue; };
+		let node = ws.nodes[idx: size];
+		if (!node.live) { continue; };
+		if (node.split_axis == ROSEVIZ_SPLIT_NONE) {
+			let tile = ws.tiles[node.tile_index: size];
+			if (tile.kind == ROSEVIZ_TILE_NONE || !tile.enabled) { continue; };
+			out_nodes[*out_count: size] = idx;
+			out_rects[*out_count: size] = cur_rect;
+			*out_count = *out_count + 1;
+		} else {
+			let ratio = node.ratio_milli;
+			if (ratio < 150) { ratio = 150; };
+			if (ratio > 850) { ratio = 850; };
+			if (node.split_axis == ROSEVIZ_SPLIT_VERTICAL) {
+				let left_w = (cur_rect.w * ratio) / 1000;
+				let right_w = cur_rect.w - left_w - ROSEVIZ_GAP;
+				let left_rect = RosevizRect { x = cur_rect.x, y = cur_rect.y, w = left_w, h = cur_rect.h };
+				let right_rect = RosevizRect { x = cur_rect.x + left_w + ROSEVIZ_GAP, y = cur_rect.y, w = right_w, h = cur_rect.h };
+				if (node.right >= 0 && sp < ROSEVIZ_MAX_NODES) {
+					node_stack[sp: size] = node.right;
+					rect_stack[sp: size] = right_rect;
+					sp = sp + 1;
+				};
+				if (node.left >= 0 && sp < ROSEVIZ_MAX_NODES) {
+					node_stack[sp: size] = node.left;
+					rect_stack[sp: size] = left_rect;
+					sp = sp + 1;
+				};
+			} else {
+				let top_h = (cur_rect.h * ratio) / 1000;
+				let bottom_h = cur_rect.h - top_h - ROSEVIZ_GAP;
+				let top_rect = RosevizRect { x = cur_rect.x, y = cur_rect.y, w = cur_rect.w, h = top_h };
+				let bottom_rect = RosevizRect { x = cur_rect.x, y = cur_rect.y + top_h + ROSEVIZ_GAP, w = cur_rect.w, h = bottom_h };
+				if (node.right >= 0 && sp < ROSEVIZ_MAX_NODES) {
+					node_stack[sp: size] = node.right;
+					rect_stack[sp: size] = bottom_rect;
+					sp = sp + 1;
+				};
+				if (node.left >= 0 && sp < ROSEVIZ_MAX_NODES) {
+					node_stack[sp: size] = node.left;
+					rect_stack[sp: size] = top_rect;
+					sp = sp + 1;
+				};
+			};
+		};
+	};
+};
+
+fn roseviz_focus_prev_leaf(app: *RosevizApp) void = {
+	let ws = &app.workspaces[app.selected_tab: size];
+	let leaves: [ROSEVIZ_MAX_TILES_Z]i32 = [0...];
+	let count: i32 = 0;
+	roseviz_collect_leaf_nodes(ws, ws.root, leaves[0z..ROSEVIZ_MAX_TILES], &count);
+	if (count <= 0) { return; };
+	let idx: i32 = 0;
+	for (let i: i32 = 0; i < count; i += 1) {
+		if (leaves[i: size] == ws.focus_leaf) {
+			idx = i;
+			break;
+		};
+	};
+	if (idx <= 0) {
+		ws.focus_leaf = leaves[(count - 1): size];
+		return;
+	};
+	ws.focus_leaf = leaves[(idx - 1): size];
+};
+
+fn roseviz_focus_next_leaf(app: *RosevizApp) void = {
+	let ws = &app.workspaces[app.selected_tab: size];
+	let leaves: [ROSEVIZ_MAX_TILES_Z]i32 = [0...];
+	let count: i32 = 0;
+	roseviz_collect_leaf_nodes(ws, ws.root, leaves[0z..ROSEVIZ_MAX_TILES], &count);
+	if (count <= 0) { return; };
+	let idx: i32 = 0;
+	for (let i: i32 = 0; i < count; i += 1) {
+		if (leaves[i: size] == ws.focus_leaf) {
+			idx = i;
+			break;
+		};
+	};
+	if (idx + 1 >= count) {
+		ws.focus_leaf = leaves[0z];
+		return;
+	};
+	ws.focus_leaf = leaves[(idx + 1): size];
+};
+
+fn roseviz_default_topic_for_kind(kind: i32, out: []u8) i32 = {
+	if (kind == ROSEVIZ_TILE_IMAGE) {
+		let image_topic: [19]u8 = ['/', 'd', 'e', 'm', 'o', '/', 'c', 'a', 'm', 'e', 'r', 'a', '/', 'f', 'r', 'o', 'n', 't', 0];
+		return roseviz_copy_topic(out, image_topic[0z..19z], 18);
+	};
+	let points_topic: [19]u8 = ['/', 'd', 'e', 'm', 'o', '/', 'p', 'o', 'i', 'n', 't', 's', '/', 'l', 'i', 'd', 'a', 'r', 0];
+	return roseviz_copy_topic(out, points_topic[0z..19z], 18);
+};
+
+fn roseviz_bind_topic_to_tile(tile: *RosevizTile, topic: []u8, topic_len: i32) void = {
+	let temp: [ROSEVIZ_TOPIC_NAME_BYTES]u8 = [0...];
+	roseviz_copy_topic(temp[0z..ROSEVIZ_TOPIC_NAME_BYTES], topic, topic_len);
+	let slot = roseviz_bridge_track_topic(&temp[0z]);
+	if (slot < 0) {
+		tile.error_code = ROSEVIZ_ERR_BIND;
+		return;
+	};
+	tile.slot = slot;
+	tile.seq = 0u64;
+	tile.error_code = ROSEVIZ_ERR_NONE;
+	tile.topic_len = roseviz_copy_topic(tile.topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], topic, topic_len);
+};
+
+fn roseviz_clear_tile_topic(tile: *RosevizTile) void = {
+	tile.slot = -1;
+	tile.seq = 0u64;
+	tile.topic_len = 0;
+	tile.topic[0z] = 0u8;
+	tile.error_code = ROSEVIZ_ERR_NONE;
+};
+
+export fn roseviz_bind_transform_topic(app: *RosevizApp, topic: []u8, topic_len: i32) void = {
+	let temp: [ROSEVIZ_TOPIC_NAME_BYTES]u8 = [0...];
+	roseviz_copy_topic(temp[0z..ROSEVIZ_TOPIC_NAME_BYTES], topic, topic_len);
+	let slot = roseviz_bridge_track_topic(&temp[0z]);
+	if (slot < 0) {
+		app.tf_error_code = ROSEVIZ_ERR_BIND;
+		return;
+	};
+	app.tf_slot = slot;
+	app.tf_seq = 0u64;
+	app.tf_error_code = ROSEVIZ_ERR_NONE;
+	app.tf_topic_len = roseviz_copy_topic(app.tf_topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], topic, topic_len);
+};
+
+fn roseviz_bind_default_topics(app: *RosevizApp) void = {
+	for (let i: i32 = 0; i < ROSEVIZ_TAB_COUNT; i += 1) {
+		let ws = &app.workspaces[i: size];
+		let topic_buf: [ROSEVIZ_TOPIC_NAME_BYTES]u8 = [0...];
+		let image_len = roseviz_default_topic_for_kind(ROSEVIZ_TILE_IMAGE, topic_buf[0z..ROSEVIZ_TOPIC_NAME_BYTES]);
+		roseviz_bind_topic_to_tile(&ws.tiles[0z], topic_buf[0z..ROSEVIZ_TOPIC_NAME_BYTES], image_len);
+		let point_len = roseviz_default_topic_for_kind(ROSEVIZ_TILE_POINTS, topic_buf[0z..ROSEVIZ_TOPIC_NAME_BYTES]);
+		roseviz_bind_topic_to_tile(&ws.tiles[1z], topic_buf[0z..ROSEVIZ_TOPIC_NAME_BYTES], point_len);
+	};
+	let tf_topic: [15]u8 = ['/', 'd', 'e', 'm', 'o', '/', 't', 'f', '/', 'b', 'a', 's', 'i', 'c', 0];
+	roseviz_bind_transform_topic(app, tf_topic[0z..15z], 14);
+};
+
+fn roseviz_sim_send_pause_play(app: *RosevizApp) void = {
+	if (!app.sim_active || app.sim_cmd_topic_len <= 0) { return; };
+	let pause_cmd: [6]u8 = ['p', 'a', 'u', 's', 'e', 0];
+	let play_cmd: [5]u8 = ['p', 'l', 'a', 'y', 0];
+	if (app.sim_running) {
+		if (roseviz_bridge_publish_command(&app.sim_cmd_topic[0z], &pause_cmd[0z]) > 0) {
+			app.sim_running = false;
+		};
+	} else {
+		if (roseviz_bridge_publish_command(&app.sim_cmd_topic[0z], &play_cmd[0z]) > 0) {
+			app.sim_running = true;
+		};
+	};
+};
+
+fn roseviz_sim_send_reset(app: *RosevizApp) void = {
+	let reset_cmd: [6]u8 = ['r', 'e', 's', 'e', 't', 0];
+	if (!app.sim_active || app.sim_cmd_topic_len <= 0) { return; };
+	if (roseviz_bridge_publish_command(&app.sim_cmd_topic[0z], &reset_cmd[0z]) > 0) {
+		app.sim_running = true;
+	};
+};
+
+fn roseviz_sim_send_step(app: *RosevizApp) void = {
+	let step_cmd: [5]u8 = ['s', 't', 'e', 'p', 0];
+	if (!app.sim_active || app.sim_cmd_topic_len <= 0) { return; };
+	if (roseviz_bridge_publish_command(&app.sim_cmd_topic[0z], &step_cmd[0z]) > 0) {
+		app.sim_running = false;
+	};
+};
+
+export fn roseviz_use_falling_ball_preset(app: *RosevizApp) void = {
+	let points_topic: [25]u8 = ['/', 's', 'i', 'm', '/', 'f', 'a', 'l', 'l', 'i', 'n', 'g', '_', 'b', 'a', 'l', 'l', '/', 'p', 'o', 'i', 'n', 't', 's', 0];
+	let tf_topic: [21]u8 = ['/', 's', 'i', 'm', '/', 'f', 'a', 'l', 'l', 'i', 'n', 'g', '_', 'b', 'a', 'l', 'l', '/', 't', 'f', 0];
+	let cmd_topic: [22]u8 = ['/', 's', 'i', 'm', '/', 'f', 'a', 'l', 'l', 'i', 'n', 'g', '_', 'b', 'a', 'l', 'l', '/', 'c', 'm', 'd', 0];
+	let ws = &app.workspaces[0z];
+	app.selected_tab = 0;
+	app.sim_active = true;
+	app.sim_running = true;
+	app.sim_cmd_topic_len = roseviz_copy_topic(app.sim_cmd_topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], cmd_topic[0z..22z], 21);
+
+	ws.tiles[0z] = roseviz_empty_tile();
+	ws.tiles[0z].kind = ROSEVIZ_TILE_POINTS;
+	ws.tiles[0z].enabled = true;
+	ws.tiles[0z].cam = camera_default();
+	ws.tiles[0z].cam.distance = 2.6;
+	ws.tiles[0z].cam.yaw = 26.0;
+	ws.tiles[0z].cam.pitch = 16.0;
+	ws.tiles[0z].cam.target = vec3_new(0.0, 0.0, 0.45);
+	roseviz_set_default_deser(&ws.tiles[0z]);
+	roseviz_bind_topic_to_tile(&ws.tiles[0z], points_topic[0z..25z], 24);
+
+	ws.tiles[1z] = roseviz_empty_tile();
+	ws.tiles[1z].kind = ROSEVIZ_TILE_POINTS;
+	ws.tiles[1z].enabled = true;
+	ws.tiles[1z].cam = camera_default();
+	ws.tiles[1z].cam.distance = 1.8;
+	ws.tiles[1z].cam.yaw = -58.0;
+	ws.tiles[1z].cam.pitch = 28.0;
+	ws.tiles[1z].cam.target = vec3_new(0.0, 0.0, 0.55);
+	roseviz_set_default_deser(&ws.tiles[1z]);
+	roseviz_bind_topic_to_tile(&ws.tiles[1z], points_topic[0z..25z], 24);
+
+	roseviz_bind_transform_topic(app, tf_topic[0z..21z], 20);
+};
+
+fn roseviz_workspace_split_focused(ws: *RosevizWorkspace, axis: i32) void = {
+	if (ws.focus_leaf < 0 || ws.tile_count >= ROSEVIZ_MAX_TILES) { return; };
+	let leaf_idx = ws.focus_leaf;
+	let leaf = ws.nodes[leaf_idx: size];
+	if (!leaf.live || leaf.split_axis != ROSEVIZ_SPLIT_NONE || leaf.tile_index < 0) { return; };
+	let child_a = roseviz_find_free_node(ws);
+	let child_b = roseviz_find_free_node(ws);
+	if (child_a == child_b) {
+		child_b = -1;
+			for (let i: i32 = 0; i < ROSEVIZ_MAX_NODES; i += 1) {
+				if (!ws.nodes[i: size].live && i != child_a) {
+					child_b = i;
+					break;
+				};
+			};
+		};
+	let tile_b = roseviz_find_free_tile(ws);
+	if (child_a < 0 || child_b < 0 || tile_b < 0) { return; };
+
+	ws.tiles[tile_b: size] = roseviz_empty_tile();
+	let focus_tile = ws.tiles[leaf.tile_index: size];
+	if (focus_tile.kind == ROSEVIZ_TILE_IMAGE) {
+		ws.tiles[tile_b: size].kind = ROSEVIZ_TILE_POINTS;
+		ws.tiles[tile_b: size].cam = camera_default();
+		ws.tiles[tile_b: size].cam.distance = 2.2;
+		ws.tiles[tile_b: size].cam.yaw = -20.0;
+		ws.tiles[tile_b: size].cam.pitch = 24.0;
+	} else {
+		ws.tiles[tile_b: size].kind = ROSEVIZ_TILE_IMAGE;
+		ws.tiles[tile_b: size].cam = camera_default();
+	};
+	ws.tiles[tile_b: size].enabled = true;
+	roseviz_set_default_deser(&ws.tiles[tile_b: size]);
+	let topic_buf: [ROSEVIZ_TOPIC_NAME_BYTES]u8 = [0...];
+	let topic_len = roseviz_default_topic_for_kind(ws.tiles[tile_b: size].kind, topic_buf[0z..ROSEVIZ_TOPIC_NAME_BYTES]);
+	roseviz_bind_topic_to_tile(&ws.tiles[tile_b: size], topic_buf[0z..ROSEVIZ_TOPIC_NAME_BYTES], topic_len);
+
+	ws.nodes[child_a: size] = RosevizNode {
+		live = true,
+		parent = leaf_idx,
+		left = -1,
+		right = -1,
+		split_axis = ROSEVIZ_SPLIT_NONE,
+		ratio_milli = 500,
+		tile_index = leaf.tile_index,
+	};
+	ws.nodes[child_b: size] = RosevizNode {
+		live = true,
+		parent = leaf_idx,
+		left = -1,
+		right = -1,
+		split_axis = ROSEVIZ_SPLIT_NONE,
+		ratio_milli = 500,
+		tile_index = tile_b,
+	};
+	ws.nodes[leaf_idx: size] = RosevizNode {
+		live = true,
+		parent = leaf.parent,
+		left = child_a,
+		right = child_b,
+		split_axis = axis,
+		ratio_milli = 500,
+		tile_index = -1,
+	};
+	ws.tile_count = ws.tile_count + 1;
+	ws.focus_leaf = child_b;
+};
+
+fn roseviz_workspace_close_focused(ws: *RosevizWorkspace) void = {
+	if (ws.focus_leaf < 0 || ws.tile_count <= 1) { return; };
+	let leaf_idx = ws.focus_leaf;
+	let leaf = ws.nodes[leaf_idx: size];
+	if (!leaf.live || leaf.split_axis != ROSEVIZ_SPLIT_NONE) { return; };
+	let parent_idx = leaf.parent;
+	if (parent_idx < 0) { return; };
+	let parent = ws.nodes[parent_idx: size];
+	let sibling_idx = parent.left;
+	if (sibling_idx == leaf_idx) {
+		sibling_idx = parent.right;
+	};
+	let grand_idx = parent.parent;
+
+	ws.tiles[leaf.tile_index: size] = roseviz_empty_tile();
+	ws.nodes[leaf_idx: size] = roseviz_empty_node();
+	ws.nodes[parent_idx: size] = roseviz_empty_node();
+	if (grand_idx >= 0) {
+		if (ws.nodes[grand_idx: size].left == parent_idx) {
+			ws.nodes[grand_idx: size].left = sibling_idx;
+		} else {
+			ws.nodes[grand_idx: size].right = sibling_idx;
+		};
+	} else {
+		ws.root = sibling_idx;
+	};
+	ws.nodes[sibling_idx: size].parent = grand_idx;
+	ws.focus_leaf = roseviz_first_leaf(ws, sibling_idx);
+	ws.tile_count = ws.tile_count - 1;
+};
+
+fn roseviz_sidebar_clamp(app: *RosevizApp) void = {
+	let topic_count = roseviz_bridge_topic_count();
+	if (topic_count <= 0) {
+		app.sidebar_topic_selected = 0;
+		app.sidebar_topic_offset = 0;
+		return;
+	};
+	if (app.sidebar_topic_selected < 0) {
+		app.sidebar_topic_selected = 0;
+	};
+	if (app.sidebar_topic_selected >= topic_count) {
+		app.sidebar_topic_selected = topic_count - 1;
+	};
+	if (app.sidebar_topic_selected < app.sidebar_topic_offset) {
+		app.sidebar_topic_offset = app.sidebar_topic_selected;
+	};
+	if (app.sidebar_topic_selected >= app.sidebar_topic_offset + ROSEVIZ_SIDEBAR_ROWS) {
+		app.sidebar_topic_offset = app.sidebar_topic_selected - ROSEVIZ_SIDEBAR_ROWS + 1;
+	};
+	if (app.sidebar_topic_offset < 0) {
+		app.sidebar_topic_offset = 0;
+	};
+};
+
+fn roseviz_toggle_selected_sidebar_topic(app: *RosevizApp) void = {
+	let temp: [ROSEVIZ_TOPIC_NAME_BYTES]u8 = [0...];
+	let name_len = roseviz_bridge_topic_name(app.sidebar_topic_selected, &temp[0z], 256);
+	if (name_len <= 0) { return; };
+	let ws = &app.workspaces[app.selected_tab: size];
+	let tile = &ws.tiles[roseviz_focus_tile_index(ws): size];
+	if (roseviz_topic_equals(tile.topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], tile.topic_len,
+		temp[0z..ROSEVIZ_TOPIC_NAME_BYTES], name_len)) {
+		roseviz_clear_tile_topic(tile);
+		return;
+	};
+	roseviz_bind_topic_to_tile(tile, temp[0z..ROSEVIZ_TOPIC_NAME_BYTES], name_len);
+};
+
+fn roseviz_deser_supported(tile: *RosevizTile) bool = {
+	let deser_text: [19]u8 = ['f', 'i', 'r', 's', 't', '_', 'n', 'u', 'm', 'e', 'r', 'i', 'c', 'a', 'r', 'r', 'a', 'y', 0];
+	return roseviz_topic_equals(tile.deser[0z..ROSEVIZ_DESER_BYTES], tile.deser_len, deser_text[0z..19z], 18);
+};
+
+fn roseviz_refresh_palette_matches(app: *RosevizApp) void = {
+	let topic_count = roseviz_bridge_topic_count();
+	let temp: [ROSEVIZ_TOPIC_NAME_BYTES]u8 = [0...];
+	app.palette_match_count = 0;
+	app.palette_selected = 0;
+	for (let i: i32 = 0; i < ROSEVIZ_MATCH_MAX; i += 1) {
+		app.palette_match_lens[i: size] = 0;
+		app.palette_match_scores[i: size] = -9999;
+	};
+	for (let idx: i32 = 0; idx < topic_count; idx += 1) {
+		let name_len = roseviz_bridge_topic_name(idx, &temp[0z], 256);
+		if (name_len <= 0) { continue; };
+		let score = roseviz_fuzzy_score(
+			app.palette_query[0z..ROSEVIZ_PALETTE_QUERY_BYTES],
+			app.palette_query_len,
+			temp[0z..ROSEVIZ_TOPIC_NAME_BYTES],
+			name_len);
+		if (score < 0) { continue; };
+		for (let pos: i32 = 0; pos < ROSEVIZ_MATCH_MAX; pos += 1) {
+			if (pos >= app.palette_match_count ||
+				score > app.palette_match_scores[pos: size]) {
+				for (let move: i32 = ROSEVIZ_MATCH_MAX - 1; move > pos; move -= 1) {
+					app.palette_match_lens[move: size] = app.palette_match_lens[(move - 1): size];
+					app.palette_match_scores[move: size] = app.palette_match_scores[(move - 1): size];
+					let move_dst = roseviz_palette_name_slice(app, move);
+					let move_src = roseviz_palette_name_slice(app, move - 1);
+					for (let j: i32 = 0; j < 256; j += 1) {
+						move_dst[j: size] = move_src[j: size];
+					};
+				};
+				app.palette_match_scores[pos: size] = score;
+				app.palette_match_lens[pos: size] = name_len;
+				let pos_dst = roseviz_palette_name_slice(app, pos);
+				roseviz_copy_topic(pos_dst, temp[0z..ROSEVIZ_TOPIC_NAME_BYTES], name_len);
+				if (app.palette_match_count < ROSEVIZ_MATCH_MAX) {
+					app.palette_match_count = app.palette_match_count + 1;
+				};
+				break;
+			};
+		};
+	};
+	if (app.palette_selected >= app.palette_match_count) {
+		app.palette_selected = 0;
+	};
+};
+
+fn roseviz_upload_cloud_points(app: *RosevizApp, tile_idx: i32, count: i32) void = {
+	let cpu = util_cpu_color_buffer_init();
+	let xyz = roseviz_cloud_xyz_slice(app, tile_idx);
+	for (let i: i32 = 0; i < count; i += 1) {
+		let idx: size = (i * 3): size;
+		let pos = vec3_new(xyz[idx], xyz[idx + 1z], xyz[idx + 2z]);
+		util_cpu_color_buffer_add_point(&cpu, pos, color_new(1.0, 0.08, 0.08, 1.0));
+	};
+	e2_gpu_color_destroy(&app.cache_cloud_points[tile_idx: size]);
+	app.cache_cloud_points[tile_idx: size] = util_color_upload(&cpu);
+	app.cache_cloud_point_count[tile_idx: size] = count;
+};
+
+fn roseviz_find_tf_edge_index(app: *RosevizApp, child_id: i32) i32 = {
+	for (let i: i32 = 0; i < app.tf_raw_count; i += 1) {
+		let base: size = (i * 5): size;
+		if ((app.tf_raw[base + 1z]: i32) == child_id) {
+			return i;
+		};
+	};
+	return -1;
+};
+
+fn roseviz_build_tf_overlay(app: *RosevizApp) void = {
+	app.tf_error_code = ROSEVIZ_ERR_NONE;
+	app.tf_line_count = 0;
+	if (app.tf_slot < 0) { return; };
+	let slot_status = roseviz_bridge_slot_status(app.tf_slot);
+	if (slot_status < 0 && roseviz_bridge_slot_payload_size(app.tf_slot) > 0) {
+		app.tf_error_code = ROSEVIZ_ERR_DECODE;
+		return;
+	};
+	let seq = roseviz_bridge_slot_seq(app.tf_slot);
+	if (seq == 0u64 || seq == app.tf_seq) { return; };
+	let count = roseviz_bridge_decode_slot_transforms(app.tf_slot, &app.tf_raw[0z], ROSEVIZ_MAX_TRANSFORMS);
+	if (count <= 0) {
+		if (roseviz_bridge_slot_payload_size(app.tf_slot) > 0) {
+			app.tf_error_code = ROSEVIZ_ERR_DECODE;
+		};
+		return;
+	};
+	app.tf_raw_count = count;
+	let resolved: [ROSEVIZ_MAX_TRANSFORMS_Z]bool = [false...];
+	let world: [192]f32 = [0.0...];
+	for (let i: i32 = 0; i < count; i += 1) {
+		let edge_base0: size = (i * 5): size;
+		let edge_parent0 = app.tf_raw[edge_base0]: i32;
+		if (edge_parent0 >= 0 && roseviz_find_tf_edge_index(app, edge_parent0) < 0) {
+			app.tf_error_code = ROSEVIZ_ERR_TF_MISSING_PARENT;
+			return;
+		};
+	};
+	for (let pass: i32 = 0; pass < count; pass += 1) {
+		let progressed = false;
+		for (let i: i32 = 0; i < count; i += 1) {
+			if (resolved[i: size]) { continue; };
+			let edge_base1: size = (i * 5): size;
+			let edge_parent1 = app.tf_raw[edge_base1]: i32;
+			if (edge_parent1 < 0) {
+				world[(i * 3): size] = app.tf_raw[edge_base1 + 2z];
+				world[(i * 3 + 1): size] = app.tf_raw[edge_base1 + 3z];
+				world[(i * 3 + 2): size] = app.tf_raw[edge_base1 + 4z];
+				resolved[i: size] = true;
+				progressed = true;
+			} else {
+				let parent_idx1 = roseviz_find_tf_edge_index(app, edge_parent1);
+				if (parent_idx1 >= 0 && resolved[parent_idx1: size]) {
+					world[(i * 3): size] = world[(parent_idx1 * 3): size] + app.tf_raw[edge_base1 + 2z];
+					world[(i * 3 + 1): size] = world[(parent_idx1 * 3 + 1): size] + app.tf_raw[edge_base1 + 3z];
+					world[(i * 3 + 2): size] = world[(parent_idx1 * 3 + 2): size] + app.tf_raw[edge_base1 + 4z];
+					resolved[i: size] = true;
+					progressed = true;
+				};
+			};
+		};
+		if (!progressed) { break; };
+	};
+	for (let i: i32 = 0; i < count; i += 1) {
+		if (!resolved[i: size]) {
+			app.tf_error_code = ROSEVIZ_ERR_TF_CYCLE;
+			return;
+		};
+	};
+
+	let cpu = util_cpu_color_buffer_init();
+	for (let i: i32 = 0; i < count; i += 1) {
+		let edge_base2: size = (i * 5): size;
+		let edge_parent2 = app.tf_raw[edge_base2]: i32;
+		let posv = vec3_new(world[(i * 3): size], world[(i * 3 + 1): size], world[(i * 3 + 2): size]);
+		util_cpu_color_buffer_add_line(&cpu, posv, vec3_new(posv.x + 0.08, posv.y, posv.z), color_new(1.0, 0.1, 0.1, 1.0));
+		util_cpu_color_buffer_add_line(&cpu, posv, vec3_new(posv.x, posv.y + 0.08, posv.z), color_new(0.1, 1.0, 0.1, 1.0));
+		util_cpu_color_buffer_add_line(&cpu, posv, vec3_new(posv.x, posv.y, posv.z + 0.08), color_new(0.1, 0.6, 1.0, 1.0));
+		if (edge_parent2 >= 0) {
+			let parent_idx2 = roseviz_find_tf_edge_index(app, edge_parent2);
+			let parent_pos = vec3_new(
+				world[(parent_idx2 * 3): size],
+				world[(parent_idx2 * 3 + 1): size],
+				world[(parent_idx2 * 3 + 2): size]);
+			util_cpu_color_buffer_add_line(&cpu, parent_pos, posv, color_new(0.8, 0.8, 0.8, 1.0));
+		};
+	};
+	e2_gpu_color_destroy(&app.tf_lines);
+	app.tf_lines = util_color_upload(&cpu);
+	app.tf_line_count = cpu.vertex_count;
+	app.tf_seq = seq;
+};
+
+fn roseviz_update_visible_sources(app: *RosevizApp) void = {
+	roseviz_bridge_poll();
+	roseviz_sidebar_clamp(app);
+	if (app.palette_open && app.palette_topic_mode) {
+		roseviz_refresh_palette_matches(app);
+	};
+	roseviz_build_tf_overlay(app);
+
+	let ws = &app.workspaces[app.selected_tab: size];
+	let rects: [ROSEVIZ_MAX_TILES_Z]RosevizRect = [roseviz_empty_rect()...];
+	let nodes: [ROSEVIZ_MAX_TILES_Z]i32 = [0...];
+	let count: i32 = 0;
+	let canvas = RosevizRect { x = 0, y = 0, w = 1, h = 1 };
+	roseviz_layout_collect(ws, ws.root, &canvas, nodes[0z..ROSEVIZ_MAX_TILES], rects[0z..ROSEVIZ_MAX_TILES], &count);
+
+	for (let i: i32 = 0; i < count; i += 1) {
+		let node_idx = nodes[i: size];
+		let node = ws.nodes[node_idx: size];
+		let tile_idx = node.tile_index;
+		let tile = &ws.tiles[tile_idx: size];
+		tile.update_count = tile.update_count + 1;
+		if (!roseviz_deser_supported(tile)) {
+			tile.error_code = ROSEVIZ_ERR_DESER;
+			continue;
+		};
+		if (tile.slot < 0 || tile.topic_len <= 0) {
+			continue;
+		};
+		if (tile.kind == ROSEVIZ_TILE_IMAGE) {
+			let slot_status = roseviz_bridge_slot_status(tile.slot);
+			if (slot_status < 0 && roseviz_bridge_slot_payload_size(tile.slot) > 0) {
+				tile.error_code = ROSEVIZ_ERR_DECODE;
+			};
+			let image_seq = roseviz_bridge_slot_seq(tile.slot);
+			if (image_seq != 0u64 && image_seq != tile.seq) {
+				let out_w: i32 = 0;
+				let out_h: i32 = 0;
+				let out_c: i32 = 0;
+				let rgb = roseviz_image_rgb_slice(app, tile_idx);
+				let rgb_start: size = (tile_idx: size) * ROSEVIZ_IMAGE_RGB;
+				let pixels = roseviz_bridge_decode_slot_image_rgb(tile.slot, &app.cache_image_rgb[rgb_start], 786432, &out_w, &out_h, &out_c);
+				if (pixels > 0 && out_w > 0 && out_h > 0) {
+					let image_bytes: size = (out_w * out_h * 3): size;
+					if (!app.cache_image_ready[tile_idx: size] ||
+						app.cache_image_tex[tile_idx: size].width != out_w ||
+						app.cache_image_tex[tile_idx: size].height != out_h) {
+						if (app.cache_image_ready[tile_idx: size]) {
+							e2_gpu_texture_destroy(&app.cache_image_tex[tile_idx: size]);
+						};
+						app.cache_image_tex[tile_idx: size] = e2_gpu_texture_create_rgb(rgb[0z..image_bytes], out_w, out_h);
+						app.cache_image_ready[tile_idx: size] = app.cache_image_tex[tile_idx: size].valid;
+					} else {
+						e2_gpu_texture_update_rgb(&app.cache_image_tex[tile_idx: size], rgb[0z..image_bytes]);
+					};
+					app.cache_image_w[tile_idx: size] = out_w;
+					app.cache_image_h[tile_idx: size] = out_h;
+					tile.seq = image_seq;
+					tile.error_code = ROSEVIZ_ERR_NONE;
+				} else if (roseviz_bridge_slot_payload_size(tile.slot) > 0) {
+					tile.error_code = ROSEVIZ_ERR_DECODE;
+				};
+			};
+			continue;
+		};
+		if (tile.kind == ROSEVIZ_TILE_POINTS) {
+			let point_status = roseviz_bridge_slot_status(tile.slot);
+			if (point_status < 0 && roseviz_bridge_slot_payload_size(tile.slot) > 0) {
+				tile.error_code = ROSEVIZ_ERR_DECODE;
+			};
+			let points_seq = roseviz_bridge_slot_seq(tile.slot);
+			if (points_seq != 0u64 && points_seq != tile.seq) {
+				let xyz = roseviz_cloud_xyz_slice(app, tile_idx);
+				let xyz_start: size = (tile_idx: size) * ROSEVIZ_POINT_XYZ;
+				let point_count = roseviz_bridge_decode_slot_points_xyz(tile.slot, &app.cache_cloud_xyz[xyz_start], ROSEVIZ_POINT_MAX);
+				if (point_count > 0) {
+					roseviz_upload_cloud_points(app, tile_idx, point_count);
+					tile.seq = points_seq;
+					tile.error_code = ROSEVIZ_ERR_NONE;
+				} else if (roseviz_bridge_slot_payload_size(tile.slot) > 0) {
+					tile.error_code = ROSEVIZ_ERR_DECODE;
+				};
+			};
+			let point_pass = util_color_pass_init();
+			let line_pass = util_color_pass_init();
+			util_color_pass_add(&point_pass, &app.cache_cloud_points[tile_idx: size], 3.0);
+			if (app.tf_lines.valid && app.tf_error_code == ROSEVIZ_ERR_NONE) {
+				util_color_pass_add(&line_pass, &app.tf_lines, 1.5);
+			};
+			let empty_geom = util_geom_pass_init();
+			let lights = util_light_buffer_init();
+			let env = env_default();
+			let free_cam = util_camera_free_from_orbit(&tile.cam);
+			let cloud_rgb = roseviz_cloud_rgb_slice(app, tile_idx);
+			let cloud_depth = roseviz_cloud_depth_slice(app, tile_idx);
+			let ok = e2_render_camera_to_buffers(&free_cam, E2_GEOM_MODE_FLAT,
+				empty_geom.draws[0z..0z],
+				line_pass.draws[0z..(line_pass.count: size)],
+				point_pass.draws[0z..(point_pass.count: size)],
+				util_light_buffer_slice(&lights), &env,
+				cloud_rgb[0z..ROSEVIZ_CLOUD_RGB],
+				cloud_depth[0z..ROSEVIZ_CLOUD_PIXELS],
+				ROSEVIZ_CLOUD_RT_W, ROSEVIZ_CLOUD_RT_H);
+			if (ok) {
+				if (!app.cache_cloud_ready[tile_idx: size]) {
+					app.cache_cloud_tex[tile_idx: size] = e2_gpu_texture_create_rgb(
+						cloud_rgb[0z..ROSEVIZ_CLOUD_RGB],
+						ROSEVIZ_CLOUD_RT_W, ROSEVIZ_CLOUD_RT_H);
+					app.cache_cloud_ready[tile_idx: size] = app.cache_cloud_tex[tile_idx: size].valid;
+				} else {
+					e2_gpu_texture_update_rgb(&app.cache_cloud_tex[tile_idx: size], cloud_rgb[0z..ROSEVIZ_CLOUD_RGB]);
+				};
+				tile.render_count = tile.render_count + 1;
+			};
+		};
+	};
+};
+
+fn roseviz_fit_image(tile: *RosevizRect, img_w: i32, img_h: i32) RosevizRect = {
+	let out = *tile;
+	if (tile.w <= 0 || tile.h <= 0 || img_w <= 0 || img_h <= 0) {
+		return out;
+	};
+
+	let tile_aspect = (tile.w: f32) / (tile.h: f32);
+	let img_aspect = (img_w: f32) / (img_h: f32);
+
+	if (img_aspect > tile_aspect) {
+		let fit_h = ((tile.w: f32) / img_aspect): i32;
+		out.x = tile.x;
+		out.w = tile.w;
+		out.h = fit_h;
+		out.y = tile.y + (tile.h - fit_h) / 2;
+		return out;
+	};
+
+	let fit_w = ((tile.h: f32) * img_aspect): i32;
+	out.y = tile.y;
+	out.h = tile.h;
+	out.w = fit_w;
+	out.x = tile.x + (tile.w - fit_w) / 2;
+	return out;
+};
+
+fn roseviz_text_px(rt: *E2Runtime, x: i32, y: i32, s: str, r: u8, g: u8, b: u8) void = {
+	let ww: i32 = 0;
+	let wh: i32 = 0;
+	roseviz_window_dims(rt, &ww, &wh);
+	if (ww <= 0 || wh <= 0) { return; };
+	let xf = (x: f32) / (ww: f32);
+	let yf = (y: f32) / (wh: f32);
+	e2_text_add(rt, xf, yf, s, r, g, b);
+};
+
+fn roseviz_draw_sidebar_text(rt: *E2Runtime, app: *RosevizApp) void = {
+	let ws = &app.workspaces[app.selected_tab: size];
+	let tile = &ws.tiles[roseviz_focus_tile_index(ws): size];
+	roseviz_text_px(rt, 12, 14, "roseviz", 250u8, 250u8, 250u8);
+	if (app.focus_area == ROSEVIZ_FOCUS_SIDEBAR) {
+		roseviz_text_px(rt, 86, 14, "sidebar", 255u8, 224u8, 96u8);
+	};
+	roseviz_text_px(rt, 12, 34, "selected tile", 180u8, 190u8, 220u8);
+	roseviz_text_px(rt, 12, 54, roseviz_tile_name(tile.kind), 255u8, 224u8, 96u8);
+
+	roseviz_text_px(rt, 12, 82, "binding", 180u8, 190u8, 220u8);
+	if (tile.topic_len > 0) {
+		roseviz_text_px(rt, 12, 102, roseviz_topic_str(tile.topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], tile.topic_len), 255u8, 255u8, 255u8);
+	} else {
+		roseviz_text_px(rt, 12, 102, "(unbound)", 168u8, 168u8, 176u8);
+	};
+	roseviz_text_px(rt, 12, 128, "deserialize", 180u8, 190u8, 220u8);
+	roseviz_text_px(rt, 12, 148, roseviz_topic_str(tile.deser[0z..ROSEVIZ_DESER_BYTES], tile.deser_len), 220u8, 230u8, 240u8);
+	if (tile.error_code == ROSEVIZ_ERR_NONE) {
+		roseviz_text_px(rt, 12, 168, "ok", 160u8, 220u8, 160u8);
+	} else {
+		roseviz_text_px(rt, 12, 168, roseviz_error_name(tile.error_code), 255u8, 96u8, 96u8);
+	};
+
+	roseviz_text_px(rt, 12, 196, "transforms", 180u8, 190u8, 220u8);
+	if (app.tf_error_code == ROSEVIZ_ERR_NONE) {
+		roseviz_text_px(rt, 12, 216, roseviz_topic_str(app.tf_topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], app.tf_topic_len), 200u8, 210u8, 220u8);
+	} else {
+		roseviz_text_px(rt, 12, 216, roseviz_error_name(app.tf_error_code), 255u8, 96u8, 96u8);
+	};
+
+	roseviz_text_px(rt, 12, 238, "simulation", 180u8, 190u8, 220u8);
+	if (app.sim_active) {
+		let sim_state = "paused";
+		if (app.sim_running) {
+			sim_state = "running";
+		};
+		roseviz_text_px(rt, 12, 258, sim_state, 255u8, 224u8, 96u8);
+		roseviz_text_px(rt, 12, 276, roseviz_topic_str(app.sim_cmd_topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], app.sim_cmd_topic_len), 200u8, 210u8, 220u8);
+	} else {
+		roseviz_text_px(rt, 12, 258, "(none)", 168u8, 168u8, 176u8);
+	};
+
+	roseviz_text_px(rt, 12, 304, "topics", 180u8, 190u8, 220u8);
+	let temp: [ROSEVIZ_TOPIC_NAME_BYTES]u8 = [0...];
+	let base_y = 324;
+	for (let row: i32 = 0; row < ROSEVIZ_SIDEBAR_ROWS; row += 1) {
+		let idx = app.sidebar_topic_offset + row;
+		let topic_count = roseviz_bridge_topic_count();
+		if (idx >= topic_count) { break; };
+		let name_len = roseviz_bridge_topic_name(idx, &temp[0z], 256);
+		if (name_len <= 0) { continue; };
+		let rr: u8 = 178u8;
+		let gg: u8 = 178u8;
+		let bb: u8 = 184u8;
+		if (idx == app.sidebar_topic_selected) {
+			rr = 255u8;
+			gg = 224u8;
+			bb = 96u8;
+		};
+		if (roseviz_topic_equals(tile.topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], tile.topic_len, temp[0z..ROSEVIZ_TOPIC_NAME_BYTES], name_len)) {
+			rr = 255u8;
+			gg = 255u8;
+			bb = 255u8;
+		};
+		roseviz_text_px(rt, 12, base_y + row * 18, roseviz_topic_str(temp[0z..ROSEVIZ_TOPIC_NAME_BYTES], name_len), rr, gg, bb);
+	};
+
+	roseviz_text_px(rt, 12, 478, "keys", 180u8, 190u8, 220u8);
+	roseviz_text_px(rt, 12, 498, "tab sidebar/tile", 168u8, 168u8, 176u8);
+	roseviz_text_px(rt, 12, 516, "space toggle topic", 168u8, 168u8, 176u8);
+	roseviz_text_px(rt, 12, 534, "h/v split  x close", 168u8, 168u8, 176u8);
+	roseviz_text_px(rt, 12, 552, "ctrl+p palette", 168u8, 168u8, 176u8);
+	roseviz_text_px(rt, 12, 570, "ctrl+d deser edit", 168u8, 168u8, 176u8);
+	if (app.sim_active) {
+		roseviz_text_px(rt, 12, 588, "p pause/play  r reset", 168u8, 168u8, 176u8);
+		roseviz_text_px(rt, 12, 606, "s single step", 168u8, 168u8, 176u8);
+	};
+
+	if (!app.palette_open && !app.deser_edit) { return; };
+	roseviz_text_px(rt, 12, 636, "panel", 180u8, 190u8, 220u8);
+	if (app.deser_edit) {
+		roseviz_text_px(rt, 12, 656, "deserialize", 255u8, 224u8, 96u8);
+		roseviz_text_px(rt, 12, 676, roseviz_topic_str(tile.deser[0z..ROSEVIZ_DESER_BYTES], tile.deser_len), 255u8, 255u8, 255u8);
+		return;
+	};
+	if (!app.palette_topic_mode) {
+		roseviz_text_px(rt, 12, 656, "add_topic", 255u8, 224u8, 96u8);
+		roseviz_text_px(rt, 12, 676, "enter to choose topic", 170u8, 170u8, 176u8);
+		return;
+	};
+	roseviz_text_px(rt, 12, 656, "query", 180u8, 190u8, 220u8);
+	roseviz_text_px(rt, 12, 676, roseviz_topic_str(app.palette_query[0z..ROSEVIZ_PALETTE_QUERY_BYTES], app.palette_query_len), 255u8, 255u8, 255u8);
+	for (let i: i32 = 0; i < app.palette_match_count; i += 1) {
+		let col: u8 = 180u8;
+		if (i == app.palette_selected) {
+			col = 255u8;
+		};
+		roseviz_text_px(rt, 12, 700 + i * 18,
+			roseviz_topic_str(roseviz_palette_name_slice(app, i), roseviz_topic_len(roseviz_palette_name_slice(app, i))),
+			col, col, col);
+	};
+};
+
+fn roseviz_draw_bottom_text(rt: *E2Runtime, app: *RosevizApp, wh: i32) void = {
+	for (let tab: i32 = 0; tab < 10; tab += 1) {
+		let rect = roseviz_tab_rect(tab, wh);
+		let tbuf: [8]u8 = [0...];
+		let tf = fb::New(tbuf[0z..8z]);
+		fb::Wi64(&tf, tab: i64);
+		let col: u8 = 180u8;
+		if (app.selected_tab == tab) { col = 255u8; };
+		roseviz_text_px(rt, rect.x + 9, rect.y + 6, fb::ToStr(&tf), col, col, col);
+	};
+	let all_rect = roseviz_tab_all_rect(wh);
+	let all_col: u8 = 180u8;
+	if (app.selected_tab == ROSEVIZ_TAB_ALL) { all_col = 255u8; };
+	roseviz_text_px(rt, all_rect.x + 9, all_rect.y + 6, "all", all_col, all_col, all_col);
+};
+
+export fn roseviz_app_init(app: *RosevizApp) bool = {
+	app.selected_tab = 0;
+	app.focus_area = ROSEVIZ_FOCUS_TILES;
+	app.sidebar_topic_selected = 0;
+	app.sidebar_topic_offset = 0;
+	app.palette_open = false;
+	app.palette_topic_mode = false;
+	app.deser_edit = false;
+	app.palette_query_len = 0;
+	app.palette_match_count = 0;
+	app.palette_selected = 0;
+	app.tf_slot = -1;
+	app.tf_seq = 0u64;
+	app.tf_error_code = ROSEVIZ_ERR_NONE;
+	app.tf_topic_len = 0;
+	app.tf_raw_count = 0;
+	app.tf_line_count = 0;
+	app.sim_active = false;
+	app.sim_running = false;
+	app.sim_cmd_topic_len = 0;
+	app.sim_cmd_topic[0z] = 0u8;
+	for (let i: i32 = 0; i < ROSEVIZ_TAB_COUNT; i += 1) {
+		let ws = &app.workspaces[i: size];
+		ws.root = 0;
+		ws.focus_leaf = 1;
+		ws.tile_count = 2;
+		ws.tiles[0z].kind = ROSEVIZ_TILE_IMAGE;
+		ws.tiles[0z].enabled = true;
+		ws.tiles[0z].cam = camera_default();
+		roseviz_set_default_deser(&ws.tiles[0z]);
+		ws.tiles[1z].kind = ROSEVIZ_TILE_POINTS;
+		ws.tiles[1z].enabled = true;
+		ws.tiles[1z].cam = camera_default();
+		ws.tiles[1z].cam.distance = 2.2;
+		ws.tiles[1z].cam.yaw = 30.0;
+		ws.tiles[1z].cam.pitch = 20.0;
+		ws.tiles[1z].cam.target = vec3_new(0.0, 0.0, 0.0);
+		roseviz_set_default_deser(&ws.tiles[1z]);
+		ws.nodes[0z] = RosevizNode {
+			live = true,
+			parent = -1,
+			left = 1,
+			right = 2,
+			split_axis = ROSEVIZ_SPLIT_HORIZONTAL,
+			ratio_milli = 550,
+			tile_index = -1,
+		};
+		ws.nodes[1z] = RosevizNode {
+			live = true,
+			parent = 0,
+			left = -1,
+			right = -1,
+			split_axis = ROSEVIZ_SPLIT_NONE,
+			ratio_milli = 500,
+			tile_index = 0,
+		};
+		ws.nodes[2z] = RosevizNode {
+			live = true,
+			parent = 0,
+			left = -1,
+			right = -1,
+			split_axis = ROSEVIZ_SPLIT_NONE,
+			ratio_milli = 500,
+			tile_index = 1,
+		};
+	};
+
+	for (let tile_idx: i32 = 0; tile_idx < ROSEVIZ_MAX_TILES; tile_idx += 1) {
+		let rgb = roseviz_image_rgb_slice(app, tile_idx);
+		roseviz_fill_demo_image(rgb[0z..((48 * 32 * 3): size)], tile_idx);
+		app.cache_image_tex[tile_idx: size] = e2_gpu_texture_create_rgb(
+			rgb[0z..((48 * 32 * 3): size)], 48, 32);
+		app.cache_image_ready[tile_idx: size] = app.cache_image_tex[tile_idx: size].valid;
+		app.cache_image_w[tile_idx: size] = 48;
+		app.cache_image_h[tile_idx: size] = 32;
+		app.cache_cloud_points[tile_idx: size] = roseviz_make_demo_cloud();
+	};
+
+	if (roseviz_bridge_init() != 0) {
+		roseviz_bind_default_topics(app);
+	};
+
+	return app.cache_image_ready[0z] && app.cache_cloud_points[1z].valid;
+};
+
+export fn roseviz_app_shutdown(app: *RosevizApp) void = {
+	for (let i: i32 = 0; i < ROSEVIZ_MAX_TILES; i += 1) {
+		if (app.cache_image_ready[i: size]) {
+			e2_gpu_texture_destroy(&app.cache_image_tex[i: size]);
+			app.cache_image_ready[i: size] = false;
+		};
+		if (app.cache_cloud_ready[i: size]) {
+			e2_gpu_texture_destroy(&app.cache_cloud_tex[i: size]);
+			app.cache_cloud_ready[i: size] = false;
+		};
+		e2_gpu_color_destroy(&app.cache_cloud_points[i: size]);
+	};
+	e2_gpu_color_destroy(&app.tf_lines);
+	roseviz_bridge_shutdown();
+};
+
+export fn roseviz_handle_input(app: *RosevizApp, rt: *E2Runtime) void = {
+	for (let i: i32 = 0; i < rt.input.event_count; i += 1) {
+		let ev = rt.input.events[i: size];
+		if (ev.etype == EVT_KEY_PRESS && ev.key == ROSEVIZ_KEY_P &&
+			(ev.mods & ROSEVIZ_MOD_CONTROL) != 0) {
+			app.palette_open = true;
+			app.palette_topic_mode = false;
+			app.deser_edit = false;
+			app.palette_query_len = 0;
+			app.palette_query[0z] = 0u8;
+			roseviz_refresh_palette_matches(app);
+			continue;
+		};
+		if (ev.etype == EVT_KEY_PRESS && ev.key == KEY_D &&
+			(ev.mods & ROSEVIZ_MOD_CONTROL) != 0) {
+			app.deser_edit = true;
+			app.palette_open = false;
+			continue;
+		};
+		if (app.deser_edit) {
+			let deser_ws = &app.workspaces[app.selected_tab: size];
+			let deser_tile = &deser_ws.tiles[roseviz_focus_tile_index(deser_ws): size];
+			if (ev.etype == EVT_KEY_PRESS && ev.key == KEY_ESCAPE) {
+				app.deser_edit = false;
+			};
+			if (ev.etype == EVT_KEY_PRESS && ev.key == KEY_ENTER) {
+				app.deser_edit = false;
+			};
+			if (ev.etype == EVT_KEY_PRESS && ev.key == ROSEVIZ_KEY_BACKSPACE && deser_tile.deser_len > 0) {
+				deser_tile.deser_len = deser_tile.deser_len - 1;
+				deser_tile.deser[deser_tile.deser_len: size] = 0u8;
+			};
+			if (ev.etype == EVT_CHAR &&
+				deser_tile.deser_len + 1 < (ROSEVIZ_DESER_BYTES: i32) &&
+				ev.key >= 32 && ev.key <= 126) {
+				deser_tile.deser[deser_tile.deser_len: size] = ev.key: u8;
+				deser_tile.deser_len = deser_tile.deser_len + 1;
+				deser_tile.deser[deser_tile.deser_len: size] = 0u8;
+			};
+			continue;
+		};
+		if (app.palette_open) {
+			if (ev.etype == EVT_KEY_PRESS && ev.key == KEY_ESCAPE) {
+				app.palette_open = false;
+				app.palette_topic_mode = false;
+				continue;
+			};
+			if (ev.etype == EVT_KEY_PRESS && ev.key == KEY_ENTER) {
+				if (!app.palette_topic_mode) {
+					app.palette_topic_mode = true;
+					roseviz_refresh_palette_matches(app);
+				} else if (app.palette_match_count > 0) {
+					let topic_buf = roseviz_palette_name_slice(app, app.palette_selected);
+					let palette_ws = &app.workspaces[app.selected_tab: size];
+					let palette_tile = &palette_ws.tiles[roseviz_focus_tile_index(palette_ws): size];
+					roseviz_bind_topic_to_tile(palette_tile, topic_buf, roseviz_topic_len(topic_buf));
+					app.palette_open = false;
+					app.palette_topic_mode = false;
+				};
+				continue;
+			};
+			if (!app.palette_topic_mode) {
+				continue;
+			};
+			if (ev.etype == EVT_KEY_PRESS && ev.key == KEY_UP && app.palette_selected > 0) {
+				app.palette_selected = app.palette_selected - 1;
+			};
+			if (ev.etype == EVT_KEY_PRESS && ev.key == KEY_DOWN &&
+				app.palette_selected + 1 < app.palette_match_count) {
+				app.palette_selected = app.palette_selected + 1;
+			};
+			if (ev.etype == EVT_KEY_PRESS && ev.key == ROSEVIZ_KEY_BACKSPACE && app.palette_query_len > 0) {
+				app.palette_query_len = app.palette_query_len - 1;
+				app.palette_query[app.palette_query_len: size] = 0u8;
+				roseviz_refresh_palette_matches(app);
+			};
+			if (ev.etype == EVT_CHAR &&
+				app.palette_query_len + 1 < (ROSEVIZ_PALETTE_QUERY_BYTES: i32) &&
+				ev.key >= 32 && ev.key <= 126) {
+				app.palette_query[app.palette_query_len: size] = (ev.key: u8);
+				app.palette_query_len = app.palette_query_len + 1;
+				app.palette_query[app.palette_query_len: size] = 0u8;
+				roseviz_refresh_palette_matches(app);
+			};
+			continue;
+		};
+	};
+
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_0)) { app.selected_tab = 0; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_1)) { app.selected_tab = 1; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_2)) { app.selected_tab = 2; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_3)) { app.selected_tab = 3; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_4)) { app.selected_tab = 4; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_5)) { app.selected_tab = 5; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_6)) { app.selected_tab = 6; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_7)) { app.selected_tab = 7; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_8)) { app.selected_tab = 8; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_9)) { app.selected_tab = 9; };
+	if (input_key_just_pressed(&rt.input, KEY_A)) { app.selected_tab = ROSEVIZ_TAB_ALL; };
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_TAB)) {
+		if (app.focus_area == ROSEVIZ_FOCUS_TILES) {
+			app.focus_area = ROSEVIZ_FOCUS_SIDEBAR;
+		} else {
+			app.focus_area = ROSEVIZ_FOCUS_TILES;
+		};
+	};
+	roseviz_sidebar_clamp(app);
+
+	if (app.focus_area == ROSEVIZ_FOCUS_SIDEBAR) {
+		if (input_key_just_pressed(&rt.input, KEY_UP)) {
+			app.sidebar_topic_selected = app.sidebar_topic_selected - 1;
+		};
+		if (input_key_just_pressed(&rt.input, KEY_DOWN)) {
+			app.sidebar_topic_selected = app.sidebar_topic_selected + 1;
+		};
+		roseviz_sidebar_clamp(app);
+		if (input_key_just_pressed(&rt.input, KEY_SPACE)) {
+			roseviz_toggle_selected_sidebar_topic(app);
+		};
+		return;
+	};
+
+	if (input_key_just_pressed(&rt.input, KEY_UP) || input_key_just_pressed(&rt.input, KEY_LEFT)) {
+		roseviz_focus_prev_leaf(app);
+	};
+	if (input_key_just_pressed(&rt.input, KEY_DOWN) || input_key_just_pressed(&rt.input, KEY_RIGHT)) {
+		roseviz_focus_next_leaf(app);
+	};
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_H)) {
+		roseviz_workspace_split_focused(&app.workspaces[app.selected_tab: size], ROSEVIZ_SPLIT_HORIZONTAL);
+	};
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_V)) {
+		roseviz_workspace_split_focused(&app.workspaces[app.selected_tab: size], ROSEVIZ_SPLIT_VERTICAL);
+	};
+	if (input_key_just_pressed(&rt.input, ROSEVIZ_KEY_X)) {
+		roseviz_workspace_close_focused(&app.workspaces[app.selected_tab: size]);
+	};
+	if (roseviz_key_press_nomod(rt, ROSEVIZ_KEY_P)) {
+		roseviz_sim_send_pause_play(app);
+	};
+	if (roseviz_key_press_nomod(rt, KEY_R)) {
+		roseviz_sim_send_reset(app);
+	};
+	if (roseviz_key_press_nomod(rt, KEY_S)) {
+		roseviz_sim_send_step(app);
+	};
+
+	let focus_ws = &app.workspaces[app.selected_tab: size];
+	let focus_tile = &focus_ws.tiles[roseviz_focus_tile_index(focus_ws): size];
+	if (focus_tile.kind == ROSEVIZ_TILE_POINTS) {
+		util_camera_apply_orbit_controls(&focus_tile.cam, &rt.input, rt.mode == E2_MODE_TERMINAL);
+	};
+};
+
+export fn roseviz_render_frame(rt: *E2Runtime, app: *RosevizApp) void = {
+	let ww: i32 = 0;
+	let wh: i32 = 0;
+	roseviz_window_dims(rt, &ww, &wh);
+	if (ww <= 0 || wh <= 0) { return; };
+
+	roseviz_update_visible_sources(app);
+
+	let sidebar = roseviz_sidebar_rect(wh);
+	let bottom = roseviz_bottom_rect(ww, wh);
+	let canvas = roseviz_main_rect(ww, wh);
+	let ws = &app.workspaces[app.selected_tab: size];
+	let nodes: [ROSEVIZ_MAX_TILES_Z]i32 = [0...];
+	let rects: [ROSEVIZ_MAX_TILES_Z]RosevizRect = [roseviz_empty_rect()...];
+	let count: i32 = 0;
+	roseviz_layout_collect(ws, ws.root, &canvas, nodes[0z..ROSEVIZ_MAX_TILES], rects[0z..ROSEVIZ_MAX_TILES], &count);
+
+	let fill_cpu = util_cpu_color_buffer_init();
+	let line_cpu = util_cpu_color_buffer_init();
+
+	roseviz_add_rect(&fill_cpu, sidebar.x, sidebar.y, sidebar.w, sidebar.h, color_new(0.10, 0.11, 0.14, 1.0));
+	roseviz_add_rect(&fill_cpu, bottom.x, bottom.y, bottom.w, bottom.h, color_new(0.09, 0.10, 0.12, 1.0));
+	roseviz_add_outline(&line_cpu, sidebar.x, sidebar.y, sidebar.w, sidebar.h, color_new(0.22, 0.24, 0.28, 1.0));
+	roseviz_add_outline(&line_cpu, bottom.x, bottom.y, bottom.w, bottom.h, color_new(0.22, 0.24, 0.28, 1.0));
+
+	for (let tab: i32 = 0; tab < 10; tab += 1) {
+		let tab_rectv = roseviz_tab_rect(tab, wh);
+		let col = color_new(0.24, 0.25, 0.28, 1.0);
+		if (app.selected_tab == tab) {
+			col = color_new(0.95, 0.90, 0.62, 1.0);
+		};
+		roseviz_add_rect(&fill_cpu, tab_rectv.x, tab_rectv.y, tab_rectv.w, tab_rectv.h, col);
+	};
+	let all_rect = roseviz_tab_all_rect(wh);
+	let all_col = color_new(0.24, 0.25, 0.28, 1.0);
+	if (app.selected_tab == ROSEVIZ_TAB_ALL) {
+		all_col = color_new(0.95, 0.90, 0.62, 1.0);
+	};
+	roseviz_add_rect(&fill_cpu, all_rect.x, all_rect.y, all_rect.w, all_rect.h, all_col);
+
+	for (let i: i32 = 0; i < count; i += 1) {
+		let leaf_rect = rects[i: size];
+		let leaf_node = ws.nodes[nodes[i: size]: size];
+		let leaf_tile = ws.tiles[leaf_node.tile_index: size];
+		let fill = color_new(0.11, 0.12, 0.15, 1.0);
+		if (leaf_tile.kind == ROSEVIZ_TILE_POINTS) {
+			fill = color_new(0.08, 0.09, 0.11, 1.0);
+		};
+		roseviz_add_rect(&fill_cpu, leaf_rect.x, leaf_rect.y, leaf_rect.w, leaf_rect.h, fill);
+		let border = color_new(0.36, 0.38, 0.45, 1.0);
+		if (ws.focus_leaf == nodes[i: size]) {
+			border = color_new(1.0, 0.82, 0.33, 1.0);
+		};
+		if (leaf_tile.error_code != ROSEVIZ_ERR_NONE) {
+			border = color_new(0.95, 0.14, 0.14, 1.0);
+		};
+		roseviz_add_outline(&line_cpu, leaf_rect.x, leaf_rect.y, leaf_rect.w, leaf_rect.h, border);
+	};
+
+	let fill_gpu = util_color_upload(&fill_cpu);
+	let line_gpu = util_color_upload(&line_cpu);
+	let fill_pass = util_color_pass_init();
+	let line_pass = util_color_pass_init();
+	util_color_pass_add(&fill_pass, &fill_gpu, 1.0);
+	util_color_pass_add(&line_pass, &line_gpu, 2.0);
+
+	e2_pass_begin(rt, color_new(0.06, 0.07, 0.09, 1.0));
+	e2_pass_2d_geom(rt, fill_pass.draws[0z..(fill_pass.count: size)]);
+	for (let i: i32 = 0; i < count; i += 1) {
+		let draw_rect = rects[i: size];
+		let draw_node = ws.nodes[nodes[i: size]: size];
+		let draw_tile_idx = draw_node.tile_index;
+		let draw_tile = ws.tiles[draw_tile_idx: size];
+		if (draw_tile.kind == ROSEVIZ_TILE_IMAGE && app.cache_image_ready[draw_tile_idx: size]) {
+			let image_fit = roseviz_fit_image(&draw_rect, app.cache_image_w[draw_tile_idx: size], app.cache_image_h[draw_tile_idx: size]);
+			e2_pass_2d_texture(rt, &app.cache_image_tex[draw_tile_idx: size], image_fit.x, image_fit.y, image_fit.w, image_fit.h);
+		};
+		if (draw_tile.kind == ROSEVIZ_TILE_POINTS && app.cache_cloud_ready[draw_tile_idx: size]) {
+			e2_pass_2d_texture(rt, &app.cache_cloud_tex[draw_tile_idx: size],
+				draw_rect.x + 1, draw_rect.y + 1, draw_rect.w - 2, draw_rect.h - 2);
+		};
+	};
+	e2_pass_2d_lines(rt, line_pass.draws[0z..(line_pass.count: size)]);
+	e2_pass_end(rt);
+
+	e2_gpu_color_destroy(&fill_gpu);
+	e2_gpu_color_destroy(&line_gpu);
+
+	roseviz_draw_sidebar_text(rt, app);
+	roseviz_draw_bottom_text(rt, app, wh);
+	for (let i: i32 = 0; i < count; i += 1) {
+		let label_rect = rects[i: size];
+		let label_node = ws.nodes[nodes[i: size]: size];
+		let label_tile = ws.tiles[label_node.tile_index: size];
+		roseviz_text_px(rt, label_rect.x + 10, label_rect.y + 10, roseviz_tile_name(label_tile.kind), 220u8, 220u8, 220u8);
+		if (label_tile.topic_len > 0) {
+			roseviz_text_px(rt, label_rect.x + 10, label_rect.y + 30,
+				roseviz_topic_str(label_tile.topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], label_tile.topic_len), 180u8, 180u8, 188u8);
+		};
+	};
+};

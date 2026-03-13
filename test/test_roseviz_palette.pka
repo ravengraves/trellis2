@@ -1,0 +1,60 @@
+use fb;
+use proc;
+use strings;
+
+fn topic_equals(buf: []u8, n: i32, s: str) bool = {
+	return strings::fromutf8_unsafe(buf[0z..(n: size)]) == s;
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_roseviz_palette ===");
+	assert(roseviz_bridge_init() != 0, "bridge init");
+
+	for (let i: i32 = 0; i < 120; i += 1) {
+		roseviz_bridge_poll();
+		if (roseviz_bridge_topic_count() >= 2) {
+			break;
+		};
+		proc::MilliSleep(25);
+	};
+	assert(roseviz_bridge_topic_count() >= 2, "topic catalog");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 1280, 800);
+	let app = roseviz_app_zero();
+	app.workspaces[0z].root = 0;
+	app.workspaces[0z].focus_leaf = 2;
+	app.workspaces[0z].tile_count = 2;
+	app.workspaces[0z].tiles[0z].kind = ROSEVIZ_TILE_IMAGE;
+	app.workspaces[0z].tiles[0z].enabled = true;
+	app.workspaces[0z].tiles[1z].kind = ROSEVIZ_TILE_POINTS;
+	app.workspaces[0z].tiles[1z].enabled = true;
+	app.workspaces[0z].nodes[0z] = RosevizNode { live = true, parent = -1, left = 1, right = 2, split_axis = ROSEVIZ_SPLIT_HORIZONTAL, ratio_milli = 550, tile_index = -1 };
+	app.workspaces[0z].nodes[1z] = RosevizNode { live = true, parent = 0, left = -1, right = -1, split_axis = ROSEVIZ_SPLIT_NONE, ratio_milli = 500, tile_index = 0 };
+	app.workspaces[0z].nodes[2z] = RosevizNode { live = true, parent = 0, left = -1, right = -1, split_axis = ROSEVIZ_SPLIT_NONE, ratio_milli = 500, tile_index = 1 };
+	app.workspaces[0z].focus_leaf = 2;
+
+	rt.input.event_count = 1;
+	rt.input.events[0z] = InputEvent { etype = EVT_KEY_PRESS, key = ROSEVIZ_KEY_P, mods = ROSEVIZ_MOD_CONTROL, x = 0.0, y = 0.0 };
+	roseviz_handle_input(&app, &rt);
+	assert(app.palette_open, "palette open");
+
+	rt.input.events[0z] = InputEvent { etype = EVT_KEY_PRESS, key = KEY_ENTER, mods = 0, x = 0.0, y = 0.0 };
+	roseviz_handle_input(&app, &rt);
+	assert(app.palette_topic_mode, "topic mode");
+
+	let query: [12]u8 = ['p', 'o', 'i', 'n', 't', 's', '/', 'l', 'i', 'd', 'a', 'r'];
+	for (let i: i32 = 0; i < 12; i += 1) {
+		rt.input.events[0z] = InputEvent { etype = EVT_CHAR, key = query[i: size]: i32, mods = 0, x = 0.0, y = 0.0 };
+		roseviz_handle_input(&app, &rt);
+	};
+	assert(app.palette_match_count > 0, "palette matches");
+
+	rt.input.events[0z] = InputEvent { etype = EVT_KEY_PRESS, key = KEY_ENTER, mods = 0, x = 0.0, y = 0.0 };
+	roseviz_handle_input(&app, &rt);
+	assert(!app.palette_open, "palette closed");
+	let tile = app.workspaces[0z].tiles[1z];
+	assert(tile.slot >= 0, "points slot bound");
+	assert(topic_equals(tile.topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], tile.topic_len, "/demo/points/lidar"), "points topic bound");
+
+	fb::Printsln("=== test_roseviz_palette passed ===");
+};

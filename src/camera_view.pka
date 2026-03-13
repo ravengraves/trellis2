@@ -2,8 +2,6 @@
 // Wraps a DepthSensor and a GPU texture to display camera RGB/depth
 // as a 2D overlay on the main viewport.
 
-use fmt;
-
 export def CAMVIEW_MAX_W: i32 = 128;
 export def CAMVIEW_MAX_H: i32 = 96;
 def CAMVIEW_MAX_PIXELS: size = 12288z;  // 128 * 96

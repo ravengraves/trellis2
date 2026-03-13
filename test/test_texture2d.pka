@@ -5,6 +5,7 @@
 //   3. CameraView renders scene and draws overlay
 //   4. Depth visualization mode produces grayscale output
 
+use fb;
 use fmt;
 
 export fn main() void = {
