@@ -24,6 +24,7 @@ export def E2_GEOM_MODE_PBR: i32 = 1;
 export def E2_GEOM_MODE_DEPTH: i32 = 2;
 export def E2_GEOM_MODE_CELL: i32 = 3;
 export def E2_GEOM_MODE_WIREFRAME: i32 = 4;
+export def E2_GEOM_MODE_CONSTANT_COLOR: i32 = 5;
 
 // Color primitive mode for shared color buffer draws.
 def E2_PRIM_LINES: i32 = 1;
@@ -84,6 +85,12 @@ export type E2GpuTexture = struct {
 	valid: bool,
 };
 
+export type E2GpuIbl = struct {
+	sharp: E2GpuTexture,
+	blur: E2GpuTexture,
+	valid: bool,
+};
+
 export type E2Runtime = struct {
 	mode: i32,
 	term_style: i32,
@@ -113,6 +120,12 @@ fn e2_default_light() Light = {
 
 fn e2_default_env() IrradianceEnv = {
 	return env_default();
+};
+
+fn e2_clamp01(x: f32) f32 = {
+	if (x < 0.0) { return 0.0; };
+	if (x > 1.0) { return 1.0; };
+	return x;
 };
 
 fn e2_target_dims(rt: *E2Runtime, out_w: *i32, out_h: *i32) void = {
@@ -344,23 +357,16 @@ fn e2_pick_light(lights: []Light) Light = {
 	return l;
 };
 
-fn e2_pick_light2(lights: []Light) Light = {
-	if (lights.len > 1z) {
-		return lights[1z];
-	};
-	return Light {
-		position = vec3_zero(),
-		direction = vec3_zero(),
-		color = color_black(),
-		directional = true
-	};
-};
-
 fn e2_pick_env(env: *IrradianceEnv) IrradianceEnv = {
 	if (env == (0: uintptr: *IrradianceEnv)) {
 		return e2_default_env();
 	};
 	return *env;
+};
+
+fn e2_pack_pbr_lights(lights: []Light,
+	out: []f32) i32 = {
+	return render_pack_pbr_lights(lights, out);
 };
 
 export fn e2_pass_3d_geom(rt: *E2Runtime,
@@ -375,13 +381,14 @@ export fn e2_pass_3d_geom(rt: *E2Runtime,
 	e2_target_dims(rt, &w, &h);
 	if (w <= 0 || h <= 0) { return; };
 
-	let aspect = (w: f32) / (h: f32);
-	let vp = freecam_view_projection(cam, aspect);
+	let vp = freecam_view_projection(cam, w, h);
 	let light = e2_pick_light(lights);
-	let light2 = e2_pick_light2(lights);
 	let envv = e2_pick_env(env);
+	let pbr_light_data: [REND_PBR_LIGHT_FLOATS]f32 = [0.0...];
+	let pbr_light_count = e2_pack_pbr_lights(lights,
+		pbr_light_data[0z..REND_PBR_LIGHT_FLOATS]);
 
-	let env_data: [16]f32 = [0.0...];
+	let env_data: [15]f32 = [0.0...];
 	env_data[0z] = envv.sky_color.r;
 	env_data[1z] = envv.sky_color.g;
 	env_data[2z] = envv.sky_color.b;
@@ -395,9 +402,8 @@ export fn e2_pass_3d_geom(rt: *E2Runtime,
 	env_data[10z] = envv.specular_color.g;
 	env_data[11z] = envv.specular_color.b;
 	env_data[12z] = envv.intensity;
-	env_data[13z] = light2.direction.x;
-	env_data[14z] = light2.direction.y;
-	env_data[15z] = light2.direction.z;
+	env_data[13z] = envv.ibl_diffuse_mix;
+	env_data[14z] = envv.ibl_specular_mix;
 
 	for (let i: size = 0z; i < draws.len; i += 1z) {
 		let d = draws[i];
@@ -407,6 +413,14 @@ export fn e2_pass_3d_geom(rt: *E2Runtime,
 
 		if (camera_mode == E2_GEOM_MODE_DEPTH) {
 			shim_gl_begin_depth(&mvp.d[0z], cam.znear, cam.zfar);
+			shim_gl_draw_mesh_handles(d.mesh.vbo, d.mesh.ibo, d.mesh.index_count);
+			continue;
+		};
+
+		if (camera_mode == E2_GEOM_MODE_CONSTANT_COLOR) {
+			shim_gl_begin_constant(&mvp.d[0z],
+				d.material.albedo.r, d.material.albedo.g,
+				d.material.albedo.b, d.material.albedo.a);
 			shim_gl_draw_mesh_handles(d.mesh.vbo, d.mesh.ibo, d.mesh.index_count);
 			continue;
 		};
@@ -430,6 +444,9 @@ export fn e2_pass_3d_geom(rt: *E2Runtime,
 				d.material.albedo.r, d.material.albedo.g, d.material.albedo.b,
 				d.material.metallic, d.material.roughness,
 				&env_data[0z], d.material.albedo.a);
+			shim_gl_set_pbr_lights(&pbr_light_data[0z], pbr_light_count);
+			shim_gl_set_pbr_ibl_textures(envv.ibl_global_tex, envv.ibl_global_blur_tex,
+				envv.ibl_local_tex, envv.ibl_local_blur_tex);
 		} else if (camera_mode == E2_GEOM_MODE_CELL) {
 			shim_gl_begin_cell(&mvp.d[0z], &d.model.d[0z],
 				light.direction.x, light.direction.y, light.direction.z,
@@ -443,7 +460,8 @@ export fn e2_pass_3d_geom(rt: *E2Runtime,
 				d.material.albedo.r, d.material.albedo.g,
 				d.material.albedo.b, d.material.albedo.a);
 		};
-		shim_gl_set_albedo_texture(d.material.texture);
+		shim_gl_set_material_textures(d.material.texture, d.material.orm_texture,
+			d.material.normal_texture);
 		shim_gl_draw_mesh_handles(d.mesh.vbo, d.mesh.ibo, d.mesh.index_count);
 	};
 };
@@ -466,7 +484,7 @@ export fn e2_pass_3d_lines(rt: *E2Runtime, cam: *FreeCamera, draws: []E2ColorDra
 	let h: i32 = 0;
 	e2_target_dims(rt, &w, &h);
 	if (w <= 0 || h <= 0) { return; };
-	let vp = freecam_view_projection(cam, (w: f32) / (h: f32));
+	let vp = freecam_view_projection(cam, w, h);
 	e2_draw_color_pass(&vp, draws, E2_PRIM_LINES);
 };
 
@@ -475,7 +493,7 @@ export fn e2_pass_3d_points(rt: *E2Runtime, cam: *FreeCamera, draws: []E2ColorDr
 	let h: i32 = 0;
 	e2_target_dims(rt, &w, &h);
 	if (w <= 0 || h <= 0) { return; };
-	let vp = freecam_view_projection(cam, (w: f32) / (h: f32));
+	let vp = freecam_view_projection(cam, w, h);
 	e2_draw_color_pass(&vp, draws, E2_PRIM_POINTS);
 };
 
@@ -526,9 +544,62 @@ export fn e2_gpu_texture_create_rgb(data: []u8, w: i32, h: i32) E2GpuTexture = {
 	};
 };
 
+export fn e2_gpu_ibl_create_rgb(data: []u8, w: i32, h: i32) E2GpuIbl = {
+	let sharp = e2_gpu_texture_create_rgb(data, w, h);
+	let blur_handle = shim_gl_create_texture_rgb_blurred(data.data, w, h);
+	let blur = E2GpuTexture {
+		handle = blur_handle,
+		width = w,
+		height = h,
+		valid = blur_handle > 0u32,
+	};
+	return E2GpuIbl {
+		sharp = sharp,
+		blur = blur,
+		valid = sharp.valid && blur.valid,
+	};
+};
+
+export fn e2_gpu_texture_create_rgba(data: []u8, w: i32, h: i32) E2GpuTexture = {
+	let handle = shim_gl_create_texture_rgba(data.data, w, h);
+	return E2GpuTexture {
+		handle = handle,
+		width = w,
+		height = h,
+		valid = handle > 0u32,
+	};
+};
+
 export fn e2_gpu_texture_update_rgb(tex: *E2GpuTexture, data: []u8) void = {
 	if (!tex.valid) { return; };
 	shim_gl_update_texture_rgb(tex.handle, data.data, tex.width, tex.height);
+};
+
+export fn e2_gpu_ibl_update_rgb(ibl: *E2GpuIbl, data: []u8) void = {
+	if (!ibl.valid) { return; };
+	shim_gl_update_texture_rgb(ibl.sharp.handle, data.data,
+		ibl.sharp.width, ibl.sharp.height);
+	shim_gl_update_texture_rgb_blurred(ibl.blur.handle, data.data,
+		ibl.blur.width, ibl.blur.height);
+};
+
+export fn e2_gpu_texture_update_rgba(tex: *E2GpuTexture, data: []u8) void = {
+	if (!tex.valid) { return; };
+	shim_gl_update_texture_rgba(tex.handle, data.data, tex.width, tex.height);
+};
+
+export fn e2_gpu_ibl_destroy(ibl: *E2GpuIbl) void = {
+	if (ibl.sharp.valid) {
+		shim_gl_delete_texture(ibl.sharp.handle);
+		ibl.sharp.handle = 0u32;
+		ibl.sharp.valid = false;
+	};
+	if (ibl.blur.valid) {
+		shim_gl_delete_texture(ibl.blur.handle);
+		ibl.blur.handle = 0u32;
+		ibl.blur.valid = false;
+	};
+	ibl.valid = false;
 };
 
 export fn e2_gpu_texture_destroy(tex: *E2GpuTexture) void = {
@@ -539,13 +610,41 @@ export fn e2_gpu_texture_destroy(tex: *E2GpuTexture) void = {
 	};
 };
 
+export fn e2_env_set_global_ibl(env: *IrradianceEnv, ibl: *E2GpuIbl) void = {
+	if (ibl == (0: uintptr: *E2GpuIbl) || !ibl.valid) {
+		env.ibl_global_tex = 0u32;
+		env.ibl_global_blur_tex = 0u32;
+		return;
+	};
+	env.ibl_global_tex = ibl.sharp.handle;
+	env.ibl_global_blur_tex = ibl.blur.handle;
+};
+
+export fn e2_env_set_local_ibl(env: *IrradianceEnv, ibl: *E2GpuIbl,
+	diffuse_mix: f32, specular_mix: f32) void = {
+	if (ibl == (0: uintptr: *E2GpuIbl) || !ibl.valid) {
+		env.ibl_local_tex = 0u32;
+		env.ibl_local_blur_tex = 0u32;
+		env.ibl_diffuse_mix = 0.0;
+		env.ibl_specular_mix = 0.0;
+		return;
+	};
+	env.ibl_local_tex = ibl.sharp.handle;
+	env.ibl_local_blur_tex = ibl.blur.handle;
+	env.ibl_diffuse_mix = e2_clamp01(diffuse_mix);
+	env.ibl_specular_mix = e2_clamp01(specular_mix);
+};
+
+export fn e2_env_clear_local_ibl(env: *IrradianceEnv) void = {
+	env.ibl_local_tex = 0u32;
+	env.ibl_local_blur_tex = 0u32;
+	env.ibl_diffuse_mix = 0.0;
+	env.ibl_specular_mix = 0.0;
+};
+
 // Initialize the blit shader (call once after shaders are loaded).
 export fn e2_init_blit_shader() bool = {
-	let blit_vs: [4096]u8 = [0...];
-	let blit_fs: [4096]u8 = [0...];
-	if (!shader_read_into("pollyn_engine/shaders/blit.vert", blit_vs[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/blit.frag", blit_fs[0z..])) { return false; };
-	return shim_gl_init_blit_shader(&blit_vs[0z], &blit_fs[0z]) == 0;
+	return shim_gl_init_embedded_blit_shader() == 0;
 };
 
 // Draw a GPU texture as a 2D overlay at pixel position (x, y) with size (w, h).
@@ -706,12 +805,13 @@ export fn e2_render_camera_to_buffers(
 	shim_gl_enable_depth();
 	shim_gl_enable_blend();
 
-	let aspect = (w: f32) / (h: f32);
-	let vp = freecam_view_projection(cam, aspect);
+	let vp = freecam_view_projection(cam, w, h);
 	let light = e2_pick_light(lights);
-	let light2 = e2_pick_light2(lights);
 	let envv = e2_pick_env(env);
-	let env_data: [16]f32 = [0.0...];
+	let pbr_light_data: [REND_PBR_LIGHT_FLOATS]f32 = [0.0...];
+	let pbr_light_count = e2_pack_pbr_lights(lights,
+		pbr_light_data[0z..REND_PBR_LIGHT_FLOATS]);
+	let env_data: [15]f32 = [0.0...];
 	env_data[0z] = envv.sky_color.r;
 	env_data[1z] = envv.sky_color.g;
 	env_data[2z] = envv.sky_color.b;
@@ -725,9 +825,8 @@ export fn e2_render_camera_to_buffers(
 	env_data[10z] = envv.specular_color.g;
 	env_data[11z] = envv.specular_color.b;
 	env_data[12z] = envv.intensity;
-	env_data[13z] = light2.direction.x;
-	env_data[14z] = light2.direction.y;
-	env_data[15z] = light2.direction.z;
+	env_data[13z] = envv.ibl_diffuse_mix;
+	env_data[14z] = envv.ibl_specular_mix;
 
 	for (let i: size = 0z; i < geom_draws.len; i += 1z) {
 		let gdraw = geom_draws[i];
@@ -736,6 +835,10 @@ export fn e2_render_camera_to_buffers(
 		let mvp = mat4_mul(&vp, &gdraw.model);
 		if (camera_mode == E2_GEOM_MODE_DEPTH) {
 			shim_gl_begin_depth(&mvp.d[0z], cam.znear, cam.zfar);
+		} else if (camera_mode == E2_GEOM_MODE_CONSTANT_COLOR) {
+			shim_gl_begin_constant(&mvp.d[0z],
+				gdraw.material.albedo.r, gdraw.material.albedo.g,
+				gdraw.material.albedo.b, gdraw.material.albedo.a);
 		} else if (camera_mode == E2_GEOM_MODE_PBR) {
 			shim_gl_begin_pbr(&mvp.d[0z], &gdraw.model.d[0z],
 				light.direction.x, light.direction.y, light.direction.z,
@@ -744,6 +847,9 @@ export fn e2_render_camera_to_buffers(
 				gdraw.material.albedo.r, gdraw.material.albedo.g, gdraw.material.albedo.b,
 				gdraw.material.metallic, gdraw.material.roughness,
 				&env_data[0z], gdraw.material.albedo.a);
+			shim_gl_set_pbr_lights(&pbr_light_data[0z], pbr_light_count);
+			shim_gl_set_pbr_ibl_textures(envv.ibl_global_tex, envv.ibl_global_blur_tex,
+				envv.ibl_local_tex, envv.ibl_local_blur_tex);
 		} else if (camera_mode == E2_GEOM_MODE_CELL) {
 			shim_gl_begin_cell(&mvp.d[0z], &gdraw.model.d[0z],
 				light.direction.x, light.direction.y, light.direction.z,
@@ -757,11 +863,10 @@ export fn e2_render_camera_to_buffers(
 				gdraw.material.albedo.r, gdraw.material.albedo.g,
 				gdraw.material.albedo.b, gdraw.material.albedo.a);
 		};
-		if (camera_mode != E2_GEOM_MODE_DEPTH) {
-			shim_gl_set_albedo_texture(gdraw.material.texture);
+			shim_gl_set_material_textures(gdraw.material.texture,
+				gdraw.material.orm_texture, gdraw.material.normal_texture);
+			shim_gl_draw_mesh_handles(gdraw.mesh.vbo, gdraw.mesh.ibo, gdraw.mesh.index_count);
 		};
-		shim_gl_draw_mesh_handles(gdraw.mesh.vbo, gdraw.mesh.ibo, gdraw.mesh.index_count);
-	};
 
 	if (line_draws.len > 0z) {
 		shim_gl_begin_line(&vp.d[0z]);
@@ -795,6 +900,8 @@ export fn e2_render_camera_to_buffers(
 			if (!depth_draw.mesh.valid || depth_draw.mesh.index_count <= 0) { continue; };
 			let depth_mvp = mat4_mul(&vp, &depth_draw.model);
 			shim_gl_begin_depth(&depth_mvp.d[0z], cam.znear, cam.zfar);
+			shim_gl_set_material_textures(depth_draw.material.texture,
+				depth_draw.material.orm_texture, depth_draw.material.normal_texture);
 			shim_gl_draw_mesh_handles(depth_draw.mesh.vbo, depth_draw.mesh.ibo, depth_draw.mesh.index_count);
 		};
 		shim_gl_fbo_read_depth_encoded(out_depth.data, w, h, cam.znear, cam.zfar);

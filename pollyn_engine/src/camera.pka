@@ -7,7 +7,11 @@ export type Camera = struct {
 	pitch: f32,    // vertical angle (degrees)
 	distance: f32, // distance from target
 	target: Vec3,  // look-at point
-	fov: f32,      // field of view (degrees)
+	fov: f32,      // legacy vertical field of view (degrees)
+	fx: f32,       // focal length in pixels; <= 0 means derive from fov
+	fy: f32,
+	cx: f32,
+	cy: f32,
 	znear: f32,
 	zfar: f32,
 	orbit: Mat4,   // homogeneous orbit transform around target
@@ -29,6 +33,8 @@ fn camera_sync_orbit(cam: *Camera) void = {
 	};
 };
 
+// Legacy default camera. Keeps the older centered-FOV behavior by deriving
+// centered intrinsics from `fov` unless explicit `fx/fy/cx/cy` are set later.
 export fn camera_default() Camera = {
 	return Camera {
 		yaw = 45.0,
@@ -36,6 +42,10 @@ export fn camera_default() Camera = {
 		distance = 5.0,
 		target = vec3_zero(),
 		fov = 60.0,
+		fx = 0.0,
+		fy = 0.0,
+		cx = 0.0,
+		cy = 0.0,
 		znear = 0.1,
 		zfar = 100.0,
 		orbit = camera_angles_to_orbit(45.0, 30.0),
@@ -57,13 +67,55 @@ export fn camera_view(cam: *Camera) Mat4 = {
 	return mat4_lookat(eye, cam.target, up);
 };
 
-export fn camera_projection(cam: *Camera, aspect: f32) Mat4 = {
-	return mat4_perspective(cam.fov, aspect, cam.znear, cam.zfar);
+fn camera_resolve_intrinsics(fov: f32,
+	fx: f32, fy: f32, cx: f32, cy: f32,
+	w: i32, h: i32,
+	out_fx: *f32, out_fy: *f32, out_cx: *f32, out_cy: *f32) void = {
+	if (fx > 0.0 && fy > 0.0) {
+		*out_fx = fx;
+		*out_fy = fy;
+		*out_cx = cx;
+		*out_cy = cy;
+		return;
+	};
+	let fh = h: f32;
+	let fovy_rad = fov * (math::PI / 180.0);
+	let half_tan = math::tan(fovy_rad * 0.5);
+	let focal = (fh * 0.5) / half_tan;
+	*out_fx = focal;
+	*out_fy = focal;
+	*out_cx = (w: f32) * 0.5;
+	*out_cy = (h: f32) * 0.5;
 };
 
-export fn camera_view_projection(cam: *Camera, aspect: f32) Mat4 = {
+export fn camera_set_intrinsics(cam: *Camera,
+	fx: f32, fy: f32, cx: f32, cy: f32) void = {
+	cam.fx = fx;
+	cam.fy = fy;
+	cam.cx = cx;
+	cam.cy = cy;
+};
+
+export fn camera_clear_intrinsics(cam: *Camera) void = {
+	cam.fx = 0.0;
+	cam.fy = 0.0;
+	cam.cx = 0.0;
+	cam.cy = 0.0;
+};
+
+export fn camera_projection(cam: *Camera, w: i32, h: i32) Mat4 = {
+	let fx: f32 = 0.0;
+	let fy: f32 = 0.0;
+	let cx: f32 = 0.0;
+	let cy: f32 = 0.0;
+	camera_resolve_intrinsics(cam.fov, cam.fx, cam.fy, cam.cx, cam.cy,
+		w, h, &fx, &fy, &cx, &cy);
+	return mat4_pinhole(fx, fy, cx, cy, w, h, cam.znear, cam.zfar);
+};
+
+export fn camera_view_projection(cam: *Camera, w: i32, h: i32) Mat4 = {
 	let v = camera_view(cam);
-	let p = camera_projection(cam, aspect);
+	let p = camera_projection(cam, w, h);
 	return mat4_mul(&p, &v);
 };
 
@@ -101,33 +153,81 @@ export type FreeCamera = struct {
 	eye: Vec3,
 	target: Vec3,
 	up: Vec3,
-	fov: f32,
+	fov: f32,  // legacy vertical field of view (degrees)
+	fx: f32,   // focal length in pixels; <= 0 means derive from fov
+	fy: f32,
+	cx: f32,
+	cy: f32,
 	znear: f32,
 	zfar: f32,
 };
 
+// Legacy FOV-based constructor kept for compatibility. Prefer
+// `freecam_new_intrinsics(...)` when the caller already has pinhole intrinsics.
 export fn freecam_new(eye: Vec3, target: Vec3, fov: f32, znear: f32, zfar: f32) FreeCamera = {
 	return FreeCamera {
 		eye = eye,
 		target = target,
 		up = vec3_new(0.0, 0.0, 1.0),
 		fov = fov,
+		fx = 0.0,
+		fy = 0.0,
+		cx = 0.0,
+		cy = 0.0,
 		znear = znear,
 		zfar = zfar
 	};
+};
+
+export fn freecam_new_intrinsics(eye: Vec3, target: Vec3,
+	fx: f32, fy: f32, cx: f32, cy: f32,
+	znear: f32, zfar: f32) FreeCamera = {
+	return FreeCamera {
+		eye = eye,
+		target = target,
+		up = vec3_new(0.0, 0.0, 1.0),
+		fov = 60.0,
+		fx = fx,
+		fy = fy,
+		cx = cx,
+		cy = cy,
+		znear = znear,
+		zfar = zfar
+	};
+};
+
+export fn freecam_set_intrinsics(cam: *FreeCamera,
+	fx: f32, fy: f32, cx: f32, cy: f32) void = {
+	cam.fx = fx;
+	cam.fy = fy;
+	cam.cx = cx;
+	cam.cy = cy;
+};
+
+export fn freecam_clear_intrinsics(cam: *FreeCamera) void = {
+	cam.fx = 0.0;
+	cam.fy = 0.0;
+	cam.cx = 0.0;
+	cam.cy = 0.0;
 };
 
 export fn freecam_view(cam: *FreeCamera) Mat4 = {
 	return mat4_lookat(cam.eye, cam.target, cam.up);
 };
 
-export fn freecam_projection(cam: *FreeCamera, aspect: f32) Mat4 = {
-	return mat4_perspective(cam.fov, aspect, cam.znear, cam.zfar);
+export fn freecam_projection(cam: *FreeCamera, w: i32, h: i32) Mat4 = {
+	let fx: f32 = 0.0;
+	let fy: f32 = 0.0;
+	let cx: f32 = 0.0;
+	let cy: f32 = 0.0;
+	camera_resolve_intrinsics(cam.fov, cam.fx, cam.fy, cam.cx, cam.cy,
+		w, h, &fx, &fy, &cx, &cy);
+	return mat4_pinhole(fx, fy, cx, cy, w, h, cam.znear, cam.zfar);
 };
 
-export fn freecam_view_projection(cam: *FreeCamera, aspect: f32) Mat4 = {
+export fn freecam_view_projection(cam: *FreeCamera, w: i32, h: i32) Mat4 = {
 	let v = freecam_view(cam);
-	let p = freecam_projection(cam, aspect);
+	let p = freecam_projection(cam, w, h);
 	return mat4_mul(&p, &v);
 };
 
@@ -139,6 +239,10 @@ export fn freecam_from_orbit(cam: *Camera) FreeCamera = {
 		target = cam.target,
 		up = vec3_normalize(mat4_transform_dir(&cam.orbit, vec3_new(0.0, 0.0, 1.0))),
 		fov = cam.fov,
+		fx = cam.fx,
+		fy = cam.fy,
+		cx = cam.cx,
+		cy = cam.cy,
 		znear = cam.znear,
 		zfar = cam.zfar
 	};
@@ -166,6 +270,10 @@ fn default_freecam() FreeCamera = {
 		target = vec3_new(0.0, 1.0, 0.0),
 		up = vec3_new(0.0, 0.0, 1.0),
 		fov = 60.0,
+		fx = 0.0,
+		fy = 0.0,
+		cx = 0.0,
+		cy = 0.0,
 		znear = 0.1,
 		zfar = 100.0
 	};
@@ -204,6 +312,10 @@ export fn rig_stereo(cam: *FreeCamera, ipd: f32) CameraRig = {
 		target = left_target,
 		up = cam.up,
 		fov = cam.fov,
+		fx = cam.fx,
+		fy = cam.fy,
+		cx = cam.cx,
+		cy = cam.cy,
 		znear = cam.znear,
 		zfar = cam.zfar
 	};
@@ -212,6 +324,10 @@ export fn rig_stereo(cam: *FreeCamera, ipd: f32) CameraRig = {
 		target = right_target,
 		up = cam.up,
 		fov = cam.fov,
+		fx = cam.fx,
+		fy = cam.fy,
+		cx = cam.cx,
+		cy = cam.cy,
 		znear = cam.znear,
 		zfar = cam.zfar
 	};

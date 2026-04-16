@@ -122,6 +122,24 @@ export fn mat4_perspective(fovy_deg: f32, aspect: f32, znear: f32, zfar: f32) Ma
 	return m;
 };
 
+// Ideal pinhole projection using pixel-space intrinsics.
+// `fx` and `fy` are focal lengths in pixels. `cx` and `cy` are the principal
+// point in pixels using the same screen-space convention as `project_vertex`.
+export fn mat4_pinhole(fx: f32, fy: f32, cx: f32, cy: f32,
+	w: i32, h: i32, znear: f32, zfar: f32) Mat4 = {
+	let m = mat4_zero();
+	let fw = w: f32;
+	let fh = h: f32;
+	mat4_set(&m, 0, 0, (2.0 * fx) / fw);
+	mat4_set(&m, 1, 1, (2.0 * fy) / fh);
+	mat4_set(&m, 0, 2, 1.0 - ((2.0 * cx) / fw));
+	mat4_set(&m, 1, 2, ((2.0 * cy) / fh) - 1.0);
+	mat4_set(&m, 2, 2, (zfar + znear) / (znear - zfar));
+	mat4_set(&m, 3, 2, -1.0);
+	mat4_set(&m, 2, 3, (2.0 * zfar * znear) / (znear - zfar));
+	return m;
+};
+
 export fn mat4_lookat(eye: Vec3, center: Vec3, up: Vec3) Mat4 = {
 	let f = vec3_normalize(vec3_sub(center, eye));
 	let s = vec3_normalize(vec3_cross(f, up));

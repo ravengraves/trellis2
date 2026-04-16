@@ -2,7 +2,6 @@
 // GPU-accelerated via OpenGL ES 2.0 shim for all modes.
 
 use math;
-use file;
 
 // C shim GL functions (declared for GL mode)
 export @symbol("shim_gl_viewport")       fn shim_gl_viewport(x: i32, y: i32, w: i32, h: i32) void;
@@ -55,6 +54,8 @@ export @symbol("shim_gl_fbo_read_pixels_flipped") fn shim_gl_fbo_read_pixels_fli
 
 // New GL pipeline functions
 export @symbol("shim_gl_init_offscreen") fn shim_gl_init_offscreen() i32;
+export @symbol("shim_gl_init_embedded_shaders") fn shim_gl_init_embedded_shaders() i32;
+export @symbol("shim_gl_init_embedded_blit_shader") fn shim_gl_init_embedded_blit_shader() i32;
 export @symbol("shim_gl_init_shaders")   fn shim_gl_init_shaders(
 	flat_vs: *u8, flat_fs: *u8,
 	pbr_vs: *u8, pbr_fs: *u8,
@@ -62,6 +63,7 @@ export @symbol("shim_gl_init_shaders")   fn shim_gl_init_shaders(
 	wire_vs: *u8, wire_fs: *u8,
 	line_vs: *u8, line_fs: *u8,
 	depth_vs: *u8, depth_fs: *u8,
+	constant_vs: *u8, constant_fs: *u8,
 	text_vs: *u8, text_fs: *u8) i32;
 
 export @symbol("shim_gl_begin_flat") fn shim_gl_begin_flat(
@@ -70,6 +72,15 @@ export @symbol("shim_gl_begin_flat") fn shim_gl_begin_flat(
 	lr: f32, lg: f32, lb: f32,
 	cr: f32, cg: f32, cb: f32, ca: f32) void;
 
+// PBR shader textures are bound separately:
+// - material albedo/base-color texture
+// - material ORM texture (AO in R, roughness in G, metallic in B)
+// - material tangent-space normal texture
+// - global sharp equirectangular IBL texture
+// - global blurred equirectangular IBL texture
+// - local sharp equirectangular IBL texture
+// - local blurred equirectangular IBL texture
+// Direct lights are optional and uploaded separately with `shim_gl_set_pbr_lights`.
 export @symbol("shim_gl_begin_pbr") fn shim_gl_begin_pbr(
 	mvp: *f32, model: *f32,
 	ldx: f32, ldy: f32, ldz: f32,
@@ -84,6 +95,20 @@ export @symbol("shim_gl_begin_cell") fn shim_gl_begin_cell(
 	ldx: f32, ldy: f32, ldz: f32,
 	lr: f32, lg: f32, lb: f32,
 	cr: f32, cg: f32, cb: f32, ca: f32) void;
+
+export @symbol("shim_gl_begin_constant") fn shim_gl_begin_constant(
+	mvp: *f32,
+	cr: f32, cg: f32, cb: f32, ca: f32) void;
+
+export @symbol("shim_gl_set_pbr_lights") fn shim_gl_set_pbr_lights(
+	light_data: *f32, light_count: i32) void;
+
+export @symbol("shim_gl_set_pbr_ibl_textures") fn shim_gl_set_pbr_ibl_textures(
+	global_tex: u32, global_blur_tex: u32,
+	local_tex: u32, local_blur_tex: u32) void;
+
+export @symbol("shim_gl_set_material_textures") fn shim_gl_set_material_textures(
+	albedo_tex: u32, orm_tex: u32, normal_tex: u32) void;
 
 export @symbol("shim_gl_set_albedo_texture") fn shim_gl_set_albedo_texture(
 	tex: u32) void;
@@ -100,62 +125,8 @@ export @symbol("shim_gl_draw_line_segment") fn shim_gl_draw_line_segment(
 
 def SHADER_MAX_BYTES: size = 16384z;
 
-export fn shader_read_into(path: str, out: []u8) bool = {
-	if (!file::Exists(path)) { return false; };
-	let size_i64 = file::Size(path);
-	if (size_i64 <= 0) { return false; };
-	let size_bytes: size = size_i64: size;
-	if (size_bytes + 1z > out.len) { return false; };
-
-	let fd = file::MustOpen(path, "r");
-	let read_n = file::MustRead(fd, out[0z..size_bytes]);
-
-	file::Close(fd);
-	if (read_n != size_i64) { return false; };
-	out[size_bytes] = 0u8;
-	return true;
-};
-
 export fn renderer_init_shaders() bool = {
-	let flat_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let flat_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let pbr_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let pbr_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let cell_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let cell_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let wire_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let wire_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let line_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let line_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let depth_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let depth_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let text_vs_src: [SHADER_MAX_BYTES]u8 = [0...];
-	let text_fs_src: [SHADER_MAX_BYTES]u8 = [0...];
-
-	if (!shader_read_into("pollyn_engine/shaders/flat.vert", flat_vs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/flat.frag", flat_fs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/pbr.vert", pbr_vs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/pbr.frag", pbr_fs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/cell.vert", cell_vs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/cell.frag", cell_fs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/wire.vert", wire_vs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/wire.frag", wire_fs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/line.vert", line_vs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/line.frag", line_fs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/depth.vert", depth_vs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/depth.frag", depth_fs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/text.vert", text_vs_src[0z..])) { return false; };
-	if (!shader_read_into("pollyn_engine/shaders/text.frag", text_fs_src[0z..])) { return false; };
-
-	let status = shim_gl_init_shaders(
-		&flat_vs_src[0z], &flat_fs_src[0z],
-		&pbr_vs_src[0z], &pbr_fs_src[0z],
-		&cell_vs_src[0z], &cell_fs_src[0z],
-		&wire_vs_src[0z], &wire_fs_src[0z],
-		&line_vs_src[0z], &line_fs_src[0z],
-		&depth_vs_src[0z], &depth_fs_src[0z],
-		&text_vs_src[0z], &text_fs_src[0z]);
-	return status == 0;
+	return shim_gl_init_embedded_shaders() == 0;
 };
 
 // ================================================================
@@ -164,7 +135,15 @@ export fn renderer_init_shaders() bool = {
 
 export @symbol("shim_gl_create_texture_rgb") fn shim_gl_create_texture_rgb(
 	data: *u8, w: i32, h: i32) u32;
+export @symbol("shim_gl_create_texture_rgb_blurred") fn shim_gl_create_texture_rgb_blurred(
+	data: *u8, w: i32, h: i32) u32;
+export @symbol("shim_gl_create_texture_rgba") fn shim_gl_create_texture_rgba(
+	data: *u8, w: i32, h: i32) u32;
 export @symbol("shim_gl_update_texture_rgb") fn shim_gl_update_texture_rgb(
+	tex: u32, data: *u8, w: i32, h: i32) void;
+export @symbol("shim_gl_update_texture_rgb_blurred") fn shim_gl_update_texture_rgb_blurred(
+	tex: u32, data: *u8, w: i32, h: i32) void;
+export @symbol("shim_gl_update_texture_rgba") fn shim_gl_update_texture_rgba(
 	tex: u32, data: *u8, w: i32, h: i32) void;
 export @symbol("shim_gl_delete_texture") fn shim_gl_delete_texture(tex: u32) void;
 export @symbol("shim_gl_init_blit_shader") fn shim_gl_init_blit_shader(
@@ -230,7 +209,48 @@ export type LineVertex3D = struct {
 	thickness: f32,
 };
 
-def ENV_PACK_SIZE: size = 16z;
+export def REND_PBR_MAX_LIGHTS: size = 4z;
+export def REND_PBR_LIGHT_STRIDE: size = 12z;
+export def REND_PBR_LIGHT_FLOATS: size = REND_PBR_MAX_LIGHTS * REND_PBR_LIGHT_STRIDE;
+
+def ENV_PACK_SIZE: size = 15z;
+
+fn render_pack_pbr_light(dst: []f32,
+	slot: i32, l: Light) void = {
+	if (slot < 0 || slot >= (REND_PBR_MAX_LIGHTS: i32)) { return; };
+	let base: size = (slot: size) * REND_PBR_LIGHT_STRIDE;
+	dst[base] = l.position.x;
+	dst[base + 1z] = l.position.y;
+	dst[base + 2z] = l.position.z;
+	if (l.directional) {
+		dst[base + 3z] = 1.0;
+	} else {
+		dst[base + 3z] = 0.0;
+	};
+	dst[base + 4z] = l.direction.x;
+	dst[base + 5z] = l.direction.y;
+	dst[base + 6z] = l.direction.z;
+	dst[base + 7z] = 0.0;
+	dst[base + 8z] = l.color.r;
+	dst[base + 9z] = l.color.g;
+	dst[base + 10z] = l.color.b;
+	dst[base + 11z] = 0.0;
+};
+
+export fn render_pack_pbr_lights(lights: []Light,
+	out: []f32) i32 = {
+	for (let i: size = 0z; i < REND_PBR_LIGHT_FLOATS; i += 1z) {
+		out[i] = 0.0;
+	};
+	let count: i32 = lights.len: i32;
+	if (count > (REND_PBR_MAX_LIGHTS: i32)) {
+		count = REND_PBR_MAX_LIGHTS: i32;
+	};
+	for (let i: i32 = 0; i < count; i += 1) {
+		render_pack_pbr_light(out, i, lights[i: size]);
+	};
+	return count;
+};
 
 // Render mesh instances using GPU shaders
 export fn render_instances(instances: *[REND_MAX_INSTANCES]RenderInstance,
@@ -252,6 +272,10 @@ export fn render_instances(instances: *[REND_MAX_INSTANCES]RenderInstance,
 	env_data[10z] = env.specular_color.g;
 	env_data[11z] = env.specular_color.b;
 	env_data[12z] = env.intensity;
+	env_data[13z] = env.ibl_diffuse_mix;
+	env_data[14z] = env.ibl_specular_mix;
+	let light_data: [REND_PBR_LIGHT_FLOATS]f32 = [0.0...];
+	render_pack_pbr_light(light_data[0z..REND_PBR_LIGHT_FLOATS], 0, light);
 
 	let inst_i: i32 = 0;
 	for (inst_i < count) {
@@ -269,12 +293,17 @@ export fn render_instances(instances: *[REND_MAX_INSTANCES]RenderInstance,
 				inst.mat.albedo.r, inst.mat.albedo.g, inst.mat.albedo.b,
 				inst.mat.metallic, inst.mat.roughness,
 				&env_data[0z], inst.mat.albedo.a);
+			shim_gl_set_pbr_lights(&light_data[0z], 1);
+			shim_gl_set_pbr_ibl_textures(env.ibl_global_tex, env.ibl_global_blur_tex,
+				env.ibl_local_tex, env.ibl_local_blur_tex);
 		} else {
 			shim_gl_begin_flat(&full_mvp.d[0z], &inst.model.d[0z],
 				light.direction.x, light.direction.y, light.direction.z,
 				light.color.r, light.color.g, light.color.b,
 				inst.color.r, inst.color.g, inst.color.b, inst.color.a);
 		};
+		shim_gl_set_material_textures(inst.mat.texture, inst.mat.orm_texture,
+			inst.mat.normal_texture);
 
 		shim_gl_draw_mesh(&mesh.verts[0z], mesh.vert_count * VERT_STRIDE,
 			&mesh.indices[0z], mesh.index_count);
@@ -392,8 +421,7 @@ export fn render_rig(fbs: *[4]Framebuffer, rig: *CameraRig,
 		let ridx: size = ri: size;
 		let cam = &rig.cameras[ridx];
 		let fb = &fbs[ridx];
-		let aspect = (fb.width: f32) / (fb.height: f32);
-		let vp = freecam_view_projection(cam, aspect);
+		let vp = freecam_view_projection(cam, fb.width, fb.height);
 		let eye = cam.eye;
 
 		if (with_depth) {

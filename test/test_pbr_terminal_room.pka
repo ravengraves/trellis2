@@ -1,0 +1,315 @@
+// test_pbr_terminal_room.pka — Render a small lit PBR room and print it to the terminal.
+
+use fb;
+
+type AvgRgb = struct {
+	r: f32,
+	g: f32,
+	b: f32,
+};
+
+fn room_clamp01(x: f32) f32 = {
+	if (x < 0.0) { return 0.0; };
+	if (x > 1.0) { return 1.0; };
+	return x;
+};
+
+fn absf(x: f32) f32 = {
+	if (x < 0.0) { return -x; };
+	return x;
+};
+
+fn unit_to_u8(x: f32) u8 = {
+	return (room_clamp01(x) * 255.0): u8;
+};
+
+fn screen_x(ndc_x: f32, w: i32) i32 = {
+	return ((ndc_x * 0.5 + 0.5) * (w: f32)): i32;
+};
+
+fn screen_y(ndc_y: f32, h: i32) i32 = {
+	return ((1.0 - (ndc_y * 0.5 + 0.5)) * (h: f32)): i32;
+};
+
+fn trs(tx: f32, ty: f32, tz: f32,
+	sx: f32, sy: f32, sz: f32,
+	rot: Mat4) Mat4 = {
+	let scale = mat4_scale(sx, sy, sz);
+	let rs = mat4_mul(&rot, &scale);
+	let trans = mat4_translate(tx, ty, tz);
+	return mat4_mul(&trans, &rs);
+};
+
+fn fill_midnight_purple_env(data: []u8, w: i32, h: i32) void = {
+	for (let py: i32 = 0; py < h; py += 1) {
+		for (let px: i32 = 0; px < w; px += 1) {
+			let u = (px: f32) / ((w - 1): f32);
+			let v = (py: f32) / ((h - 1): f32);
+			let du = u - 0.5;
+			let center = 1.0 - du * du * 12.0;
+			let panel_l = 1.0 - (u - 0.32) * (u - 0.32) * 280.0;
+			let panel_r = 1.0 - (u - 0.68) * (u - 0.68) * 280.0;
+			let horizon = 1.0 - (v - 0.56) * (v - 0.56) * 110.0;
+			let idx: size = ((py * w + px) * 3): size;
+			let glow = 0.06 * room_clamp01(center) +
+				0.02 * room_clamp01(panel_l) +
+				0.02 * room_clamp01(panel_r) +
+				0.05 * room_clamp01(horizon);
+			let sky = 0.06 + 0.06 * (1.0 - v) - 0.02 * du * du;
+			let r = room_clamp01(0.08 + 0.55 * sky + 0.55 * glow);
+			let g = room_clamp01(0.03 + 0.22 * sky + 0.12 * glow);
+			let b = room_clamp01(0.13 + 0.95 * sky + 1.10 * glow);
+			data[idx] = unit_to_u8(r);
+			data[idx + 1z] = unit_to_u8(g);
+			data[idx + 2z] = unit_to_u8(b);
+		};
+	};
+};
+
+fn copy_rgb_to_framebuffer(src: []u8, dst: *Framebuffer) void = {
+	let total: size = (dst.width * dst.height * 3): size;
+	for (let i: size = 0z; i < total; i += 1z) {
+		dst.pixels[i] = src[i];
+	};
+};
+
+fn region_avg_rgb(pixels: []u8, w: i32, h: i32,
+	cx: i32, cy: i32, radius: i32) AvgRgb = {
+	let x0 = cx - radius;
+	let x1 = cx + radius;
+	let y0 = cy - radius;
+	let y1 = cy + radius;
+	let sum_r: i32 = 0;
+	let sum_g: i32 = 0;
+	let sum_b: i32 = 0;
+	let count: i32 = 0;
+	for (let py: i32 = y0; py <= y1; py += 1) {
+		if (py < 0 || py >= h) { continue; };
+		for (let px: i32 = x0; px <= x1; px += 1) {
+			if (px < 0 || px >= w) { continue; };
+			let idx: size = ((py * w + px) * 3): size;
+			sum_r = sum_r + (pixels[idx]: i32);
+			sum_g = sum_g + (pixels[idx + 1z]: i32);
+			sum_b = sum_b + (pixels[idx + 2z]: i32);
+			count = count + 1;
+		};
+	};
+	if (count <= 0) {
+		return AvgRgb { r = 0.0, g = 0.0, b = 0.0 };
+	};
+	let denom = count: f32;
+	return AvgRgb {
+		r = (sum_r: f32) / denom,
+		g = (sum_g: f32) / denom,
+		b = (sum_b: f32) / denom,
+	};
+};
+
+fn sample_projected_rgb(pixels: []u8, w: i32, h: i32,
+	vp: *Mat4, world: Vec3, radius: i32) AvgRgb = {
+	let clip = mat4_project(vp, world);
+	return region_avg_rgb(pixels, w, h,
+		screen_x(clip.x, w), screen_y(clip.y, h), radius);
+};
+
+fn avg_is_purple(c: AvgRgb) bool = {
+	return c.r > c.g + 12.0 &&
+		c.b > c.g + 26.0 &&
+		c.b > c.r + 10.0;
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_pbr_terminal_room ===");
+
+	let term_cols = shim_term_width();
+	if (term_cols <= 0) { term_cols = 80; };
+	if (term_cols > 96) { term_cols = 96; };
+	if (term_cols < 64) { term_cols = 64; };
+
+	let term_rows = shim_term_height() - 6;
+	if (term_rows > 28) { term_rows = 28; };
+	if (term_rows < 18) { term_rows = 18; };
+
+	let w = term_cols;
+	let h = term_rows * 2;
+	let rgb_len: size = (w * h * 3): size;
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, w, h);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	let plane = mesh_create_plane();
+	let box = mesh_create_box();
+	let gpu_plane = util_mesh_upload(&plane);
+	let gpu_box = util_mesh_upload(&box);
+	assert(gpu_plane.valid, "gpu plane valid");
+	assert(gpu_box.valid, "gpu box valid");
+
+	let geom = util_geom_pass_init();
+
+	let room_w: f32 = 7.2;
+	let room_d: f32 = 7.2;
+	let room_h: f32 = 3.2;
+	let room_cy: f32 = 1.8;
+	let room_back: f32 = room_cy + room_d * 0.5;
+
+	let wall_mat = material_pbr(color_gray(0.80), 0.0, 0.90);
+	let back_mat = material_pbr(color_new(0.17, 0.08, 0.29, 1.0), 0.0, 0.82);
+	let floor_mat = material_pbr(color_new(0.58, 0.59, 0.62, 1.0), 0.0, 0.96);
+	let ceil_mat = material_pbr(color_gray(0.74), 0.0, 0.95);
+
+	let floor_model = trs(0.0, room_cy, 0.0,
+		room_w, 1.0, room_d,
+		mat4_rotate_x(90.0));
+	let ceil_model = trs(0.0, room_cy, room_h,
+		room_w, 1.0, room_d,
+		mat4_rotate_x(-90.0));
+	let back_model = trs(0.0, room_back, room_h * 0.5,
+		room_w, 1.0, room_h,
+		mat4_rotate_z(180.0));
+	let left_model = trs(-room_w * 0.5, room_cy, room_h * 0.5,
+		room_d, 1.0, room_h,
+		mat4_rotate_z(-90.0));
+	let right_model = trs(room_w * 0.5, room_cy, room_h * 0.5,
+		room_d, 1.0, room_h,
+		mat4_rotate_z(90.0));
+
+	util_geom_pass_add(&geom, &gpu_plane, floor_model, floor_mat);
+	util_geom_pass_add(&geom, &gpu_plane, ceil_model, ceil_mat);
+	util_geom_pass_add(&geom, &gpu_plane, back_model, back_mat);
+	util_geom_pass_add(&geom, &gpu_plane, left_model, wall_mat);
+	util_geom_pass_add(&geom, &gpu_plane, right_model, wall_mat);
+
+	let cube_scale = mat4_scale(1.0, 1.0, 1.0);
+	let red_pos = vec3_new(-1.7, 1.25, 0.55);
+	let green_pos = vec3_new(0.0, 1.4, 0.55);
+	let gold_pos = vec3_new(1.7, 1.55, 0.55);
+	let red_tx = mat4_translate(red_pos.x, red_pos.y, red_pos.z);
+	let green_tx = mat4_translate(green_pos.x, green_pos.y, green_pos.z);
+	let gold_tx = mat4_translate(gold_pos.x, gold_pos.y, gold_pos.z);
+	let red_model = mat4_mul(&red_tx, &cube_scale);
+	let green_model = mat4_mul(&green_tx, &cube_scale);
+	let gold_model = mat4_mul(&gold_tx, &cube_scale);
+
+	util_geom_pass_add(&geom, &gpu_box, red_model,
+		material_pbr(color_new(0.90, 0.10, 0.10, 1.0), 0.0, 0.34));
+	util_geom_pass_add(&geom, &gpu_box, green_model,
+		material_pbr(color_new(0.14, 0.78, 0.20, 1.0), 0.0, 0.30));
+	util_geom_pass_add(&geom, &gpu_box, gold_model,
+		material_pbr(color_new(1.0, 0.76, 0.14, 1.0), 1.0, 0.28));
+
+	let cam = freecam_new(
+		vec3_new(0.0, -5.8, 1.65),
+		vec3_new(0.0, 1.5, 0.95),
+		34.0, 0.1, 30.0);
+	let vp = freecam_view_projection(&cam, w, h);
+
+	let lights = util_light_buffer_init();
+	util_light_buffer_clear(&lights);
+	util_light_buffer_add(&lights,
+		light_point(vec3_new(-2.4, -0.6, 2.75),
+			color_new(4.6, 4.0, 3.2, 1.0)));
+	util_light_buffer_add(&lights,
+		light_point(vec3_new(2.4, -0.4, 2.75),
+			color_new(3.2, 3.8, 4.2, 1.0)));
+	util_light_buffer_add(&lights,
+		light_point(vec3_new(-2.2, 4.2, 2.8),
+			color_new(3.1, 2.7, 2.3, 1.0)));
+	util_light_buffer_add(&lights,
+		light_point(vec3_new(2.2, 4.4, 2.8),
+			color_new(3.4, 3.4, 3.2, 1.0)));
+
+	let env_pixels: [24576]u8 = [0...];
+	fill_midnight_purple_env(env_pixels[0z..], 128, 64);
+	let ibl = e2_gpu_ibl_create_rgb(env_pixels[0z..], 128, 64);
+	assert(ibl.valid, "ibl textures valid");
+
+	let env = env_default();
+	env.sky_color = color_new(0.13, 0.06, 0.24, 1.0);
+	env.ground_color = color_new(0.06, 0.05, 0.08, 1.0);
+	env.horizon_color = color_new(0.24, 0.11, 0.38, 1.0);
+	env.specular_color = color_new(0.48, 0.38, 0.60, 1.0);
+	env.intensity = 0.82;
+	e2_env_set_global_ibl(&env, &ibl);
+
+	let out_rgb: [192000]u8 = [0...];
+	let no_depth: [1]f32 = [0.0];
+	let empty = util_color_pass_init();
+	let ok = e2_render_camera_to_buffers(&cam, E2_GEOM_MODE_PBR,
+		geom.draws[0z..(geom.count: size)],
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		util_light_buffer_slice(&lights),
+		&env,
+		out_rgb[0z..rgb_len],
+		no_depth[0z..0z],
+		w, h);
+	assert(ok, "terminal room render ok");
+
+	let image = fb_init(w, h);
+	copy_rgb_to_framebuffer(out_rgb[0z..rgb_len], &image);
+
+	fb::Printsln("PBR room preview: red cube, green cube, gold metallic cube, four lights, midnight-purple IBL");
+	term_render_halfblock_lines(&image, w, term_rows);
+
+	let outer_a = sample_projected_rgb(out_rgb[0z..rgb_len], w, h,
+		&vp, red_pos, 4);
+	let green_avg = sample_projected_rgb(out_rgb[0z..rgb_len], w, h,
+		&vp, green_pos, 4);
+	let outer_b = sample_projected_rgb(out_rgb[0z..rgb_len], w, h,
+		&vp, gold_pos, 4);
+	let wall_avg = sample_projected_rgb(out_rgb[0z..rgb_len], w, h,
+		&vp, vec3_new(0.0, room_back, 2.3), 5);
+	let red_avg = outer_a;
+	let gold_avg = outer_b;
+	if ((outer_b.r - outer_b.g) > (outer_a.r - outer_a.g)) {
+		red_avg = outer_b;
+		gold_avg = outer_a;
+	};
+
+	let tbuf: [384]u8 = [0...];
+	let tf = fb::New(tbuf[0z..384z]);
+	fb::Write(&tf, "  red=(");
+	fb::Wf64(&tf, red_avg.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, red_avg.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, red_avg.b: f64, 1, "dec");
+	fb::Write(&tf, ") green=(");
+	fb::Wf64(&tf, green_avg.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, green_avg.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, green_avg.b: f64, 1, "dec");
+	fb::Write(&tf, ") gold=(");
+	fb::Wf64(&tf, gold_avg.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, gold_avg.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, gold_avg.b: f64, 1, "dec");
+	fb::Write(&tf, ") wall=(");
+	fb::Wf64(&tf, wall_avg.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, wall_avg.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, wall_avg.b: f64, 1, "dec");
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
+
+	assert(red_avg.r > 130.0, "red cube is clearly visible in the darker scene");
+	assert(red_avg.r > red_avg.g + 45.0, "red cube stays red-dominant");
+	assert(red_avg.r > red_avg.b + 40.0, "red cube exceeds blue");
+	assert(green_avg.g > green_avg.r + 25.0, "green cube stays green-dominant");
+	assert(green_avg.g > green_avg.b + 18.0, "green cube exceeds blue");
+	assert(gold_avg.r > 90.0, "gold cube is bright enough to read");
+	assert(gold_avg.g > 50.0, "gold cube keeps a warm green channel");
+	assert(gold_avg.r > gold_avg.g + 25.0, "gold cube stays warm rather than neutral");
+	assert(gold_avg.g >= gold_avg.b, "gold cube does not drift magenta under purple IBL");
+	assert(avg_is_purple(wall_avg), "back wall reads as midnight purple");
+	assert(wall_avg.b > 70.0, "back wall is bright enough to read as a lit room");
+
+	e2_gpu_ibl_destroy(&ibl);
+	e2_gpu_mesh_destroy(&gpu_plane);
+	e2_gpu_mesh_destroy(&gpu_box);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_pbr_terminal_room passed ===");
+};

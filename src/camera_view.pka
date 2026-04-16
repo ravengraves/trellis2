@@ -22,7 +22,8 @@ export type CameraView = struct {
 	initialized: bool,
 };
 
-// Create a camera view with sensor parameters and screen placement.
+// Legacy FOV-based constructor. Prefer `camera_view_new_intrinsics(...)`
+// when the caller has explicit pinhole intrinsics.
 export fn camera_view_new(
 	eye: Vec3, target: Vec3,
 	fov: f32, znear: f32, zfar: f32,
@@ -31,6 +32,32 @@ export fn camera_view_new(
 	screen_w: i32, screen_h: i32,
 	mode: i32) CameraView = {
 	let sensor = depth_sensor_new(eye, target, fov, znear, zfar,
+		sensor_w, sensor_h);
+	return CameraView {
+		sensor = sensor,
+		texture = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false },
+		display_buf = [0...],
+		mode = mode,
+		screen_x = screen_x,
+		screen_y = screen_y,
+		screen_w = screen_w,
+		screen_h = screen_h,
+		initialized = false,
+	};
+};
+
+// Create a camera view with explicit ideal pinhole intrinsics in pixels.
+export fn camera_view_new_intrinsics(
+	eye: Vec3, target: Vec3,
+	fx: f32, fy: f32, cx: f32, cy: f32,
+	znear: f32, zfar: f32,
+	sensor_w: i32, sensor_h: i32,
+	screen_x: i32, screen_y: i32,
+	screen_w: i32, screen_h: i32,
+	mode: i32) CameraView = {
+	let sensor = depth_sensor_new_intrinsics(eye, target,
+		fx, fy, cx, cy,
+		znear, zfar,
 		sensor_w, sensor_h);
 	return CameraView {
 		sensor = sensor,
@@ -114,10 +141,8 @@ export fn camera_view_draw(view: *CameraView, rt: *E2Runtime) void = {
 // Update the sensor's camera pose.
 export fn camera_view_set_pose(view: *CameraView,
 	eye: Vec3, target: Vec3) void = {
-	view.sensor.cam = freecam_new(eye, target,
-		view.sensor.cam.fov,
-		view.sensor.cam.znear,
-		view.sensor.cam.zfar);
+	view.sensor.cam.eye = eye;
+	view.sensor.cam.target = target;
 };
 
 // Cleanup GPU resources.

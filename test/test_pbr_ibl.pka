@@ -1,0 +1,175 @@
+// test_pbr_ibl.pka — Verify equirectangular IBL diffuse lighting and roughness-based specular blur.
+
+use fb;
+
+type AvgRgb = struct {
+	r: f32,
+	g: f32,
+	b: f32,
+};
+
+fn fill_black(data: []u8) void = {
+	for (let i: size = 0z; i < data.len; i += 1z) {
+		data[i] = 0u8;
+	};
+};
+
+fn fill_env_hotspot(data: []u8, w: i32, h: i32,
+	cx: i32, cy: i32, radius: i32, r: u8, g: u8, b: u8) void = {
+	fill_black(data);
+	for (let py: i32 = 0; py < h; py += 1) {
+		for (let px: i32 = 0; px < w; px += 1) {
+			let dx = px - cx;
+			let dy = py - cy;
+			if (dx * dx + dy * dy > radius * radius) { continue; };
+			let idx: size = ((py * w + px) * 3): size;
+			data[idx] = r;
+			data[idx + 1z] = g;
+			data[idx + 2z] = b;
+		};
+	};
+};
+
+fn region_avg_rgb(pixels: []u8, w: i32,
+	x0: i32, y0: i32, x1: i32, y1: i32) AvgRgb = {
+	let sum_r: i32 = 0;
+	let sum_g: i32 = 0;
+	let sum_b: i32 = 0;
+	let count: i32 = 0;
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			let idx: size = ((py * w + px) * 3): size;
+			sum_r = sum_r + (pixels[idx]: i32);
+			sum_g = sum_g + (pixels[idx + 1z]: i32);
+			sum_b = sum_b + (pixels[idx + 2z]: i32);
+			count = count + 1;
+		};
+	};
+	let denom = count: f32;
+	return AvgRgb {
+		r = (sum_r: f32) / denom,
+		g = (sum_g: f32) / denom,
+		b = (sum_b: f32) / denom,
+	};
+};
+
+fn render_boxes(draws: []E2GeomDraw,
+	cam: *FreeCamera, lights: []Light, env: *IrradianceEnv,
+	out_rgb: []u8, w: i32, h: i32) void = {
+	let empty = util_color_pass_init();
+	let no_depth: [1]f32 = [0.0];
+	let ok = e2_render_camera_to_buffers(cam, E2_GEOM_MODE_PBR,
+		draws,
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		lights,
+		env,
+		out_rgb,
+		no_depth[0z..0z],
+		w, h);
+	assert(ok, "pbr ibl render ok");
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_pbr_ibl ===");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 128, 96);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	let box = mesh_create_box();
+	let gpu_box = util_mesh_upload(&box);
+	assert(gpu_box.valid, "gpu box valid");
+
+	let geom_pass = util_geom_pass_init();
+	let scale = mat4_scale(0.78, 0.78, 0.78);
+	let tx_left = mat4_translate(-1.02, 0.0, 0.0);
+	let tx_center = mat4_translate(0.0, 0.0, 0.0);
+	let tx_right = mat4_translate(1.02, 0.0, 0.0);
+	let model_left = mat4_mul(&tx_left, &scale);
+	let model_center = mat4_mul(&tx_center, &scale);
+	let model_right = mat4_mul(&tx_right, &scale);
+	util_geom_pass_add(&geom_pass, &gpu_box, model_left,
+		material_pbr(color_white(), 1.0, 0.0));
+	util_geom_pass_add(&geom_pass, &gpu_box, model_center,
+		material_pbr(color_white(), 0.0, 1.0));
+	util_geom_pass_add(&geom_pass, &gpu_box, model_right,
+		material_pbr(color_white(), 1.0, 1.0));
+	assert(geom_pass.count == 3, "three draws");
+
+	let cam = freecam_new(
+		vec3_new(0.0, -3.2, 0.0),
+		vec3_new(0.0, 0.0, 0.0),
+		30.0, 0.1, 20.0);
+
+	let lights = util_light_buffer_init();
+	util_light_buffer_clear(&lights);
+	util_light_buffer_add(&lights,
+		light_directional(vec3_new(0.0, 1.0, 0.0), color_black()));
+
+	let env_pixels: [6144]u8 = [0...];
+	// -Y maps near u=0.25, v=0.5 with the shader's equirectangular lookup.
+	fill_env_hotspot(env_pixels[0z..], 64, 32, 16, 16, 1, 255u8, 32u8, 32u8);
+	let ibl = e2_gpu_ibl_create_rgb(env_pixels[0z..], 64, 32);
+	assert(ibl.valid, "ibl textures valid");
+
+	let env = IrradianceEnv {
+		sky_color = color_black(),
+		ground_color = color_black(),
+		horizon_color = color_black(),
+		specular_color = color_black(),
+		intensity = 3.0,
+		ibl_global_tex = 0u32,
+		ibl_global_blur_tex = 0u32,
+		ibl_local_tex = 0u32,
+		ibl_local_blur_tex = 0u32,
+		ibl_diffuse_mix = 0.0,
+		ibl_specular_mix = 0.0
+	};
+	e2_env_set_global_ibl(&env, &ibl);
+
+	let out_rgb: [36864]u8 = [0...];
+	render_boxes(
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		&cam,
+		util_light_buffer_slice(&lights),
+		&env,
+		out_rgb[0z..],
+		128, 96);
+
+	let left = region_avg_rgb(out_rgb[0z..], 128, 10, 24, 36, 72);
+	let center = region_avg_rgb(out_rgb[0z..], 128, 48, 24, 80, 72);
+	let right = region_avg_rgb(out_rgb[0z..], 128, 92, 24, 118, 72);
+
+	let side_bright = left;
+	let side_dim = right;
+	if (right.r > left.r) {
+		side_bright = right;
+		side_dim = left;
+	};
+
+	let tbuf: [256]u8 = [0...];
+	let tf = fb::New(tbuf[0z..256z]);
+	fb::Write(&tf, "  center rgb=(");
+	fb::Wf64(&tf, center.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, center.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, center.b: f64, 1, "dec");
+	fb::Write(&tf, ") bright-side r=");
+	fb::Wf64(&tf, side_bright.r: f64, 1, "dec");
+	fb::Write(&tf, " dim-side r=");
+	fb::Wf64(&tf, side_dim.r: f64, 1, "dec");
+	fb::Println(&tf);
+
+	assert(center.r > center.g + 20.0, "dielectric box gets red diffuse ibl");
+	assert(center.r > center.b + 20.0, "dielectric box stays dominated by hotspot color");
+	assert(side_bright.r > side_dim.r + 25.0,
+		"smooth metallic reflection stays sharper than rough metallic reflection");
+	assert(side_bright.r > 60.0, "sharp metallic ibl is clearly visible");
+	assert(side_dim.r > 10.0, "blurred metallic ibl still contributes");
+
+	e2_gpu_ibl_destroy(&ibl);
+	e2_gpu_mesh_destroy(&gpu_box);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_pbr_ibl passed ===");
+};

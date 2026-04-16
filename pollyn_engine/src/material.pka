@@ -21,6 +21,8 @@ export type Material = struct {
 	roughness: f32,      // 0.0 = mirror, 1.0 = rough
 	shading: i32,        // SHADE_FLAT or SHADE_PBR
 	texture: u32,        // GL texture handle (0 = no texture)
+	orm_texture: u32,    // GL ORM texture handle: R=AO, G=roughness, B=metallic
+	normal_texture: u32, // GL tangent-space normal texture handle
 };
 
 // ================================================================
@@ -32,7 +34,13 @@ export type IrradianceEnv = struct {
 	ground_color: Color,   // hemisphere down
 	horizon_color: Color,  // blend at equator
 	specular_color: Color, // fake specular reflection tint
-	intensity: f32,        // environment brightness
+	intensity: f32,        // environment brightness / IBL scale
+	ibl_global_tex: u32,   // global sharp equirectangular environment map
+	ibl_global_blur_tex: u32, // global blurred equirectangular environment map
+	ibl_local_tex: u32,    // local sharp equirectangular environment map
+	ibl_local_blur_tex: u32, // local blurred equirectangular environment map
+	ibl_diffuse_mix: f32,  // 0 = global diffuse only, 1 = local diffuse only
+	ibl_specular_mix: f32, // 0 = global spec only, 1 = local spec only
 };
 
 // ================================================================
@@ -45,7 +53,9 @@ export fn material_flat(color: Color) Material = {
 		metallic = 0.0,
 		roughness = 1.0,
 		shading = SHADE_FLAT,
-		texture = 0u32
+		texture = 0u32,
+		orm_texture = 0u32,
+		normal_texture = 0u32
 	};
 };
 
@@ -55,7 +65,9 @@ export fn material_pbr(albedo: Color, metallic: f32, roughness: f32) Material = 
 		metallic = metallic,
 		roughness = roughness,
 		shading = SHADE_PBR,
-		texture = 0u32
+		texture = 0u32,
+		orm_texture = 0u32,
+		normal_texture = 0u32
 	};
 };
 
@@ -65,7 +77,13 @@ export fn env_default() IrradianceEnv = {
 		ground_color = Color { r = 0.1, g = 0.08, b = 0.05, a = 1.0 },
 		horizon_color = Color { r = 0.4, g = 0.4, b = 0.4, a = 1.0 },
 		specular_color = Color { r = 0.8, g = 0.85, b = 0.9, a = 1.0 },
-		intensity = 1.0
+		intensity = 1.0,
+		ibl_global_tex = 0u32,
+		ibl_global_blur_tex = 0u32,
+		ibl_local_tex = 0u32,
+		ibl_local_blur_tex = 0u32,
+		ibl_diffuse_mix = 0.0,
+		ibl_specular_mix = 0.0
 	};
 };
 

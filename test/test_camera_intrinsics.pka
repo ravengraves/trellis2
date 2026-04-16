@@ -1,0 +1,61 @@
+// test_camera_intrinsics.pka — Verify pinhole intrinsics projection.
+
+use math;
+
+fn absf(x: f32) f32 = {
+	if (x < 0.0) { return -x; };
+	return x;
+};
+
+fn approx_eq(a: f32, b: f32, tol: f32) bool = {
+	return absf(a - b) <= tol;
+};
+
+fn screen_x(ndc_x: f32, w: i32) f32 = {
+	return (ndc_x * 0.5 + 0.5) * (w: f32);
+};
+
+fn screen_y(ndc_y: f32, h: i32) f32 = {
+	return (1.0 - (ndc_y * 0.5 + 0.5)) * (h: f32);
+};
+
+export fn main() void = {
+	let w: i32 = 64;
+	let h: i32 = 48;
+	let tol: f32 = 0.01;
+
+	let pinhole = freecam_new_intrinsics(
+		vec3_zero(),
+		vec3_new(0.0, 1.0, 0.0),
+		80.0, 60.0, 18.0, 13.0,
+		0.1, 20.0);
+	let pinhole_vp = freecam_view_projection(&pinhole, w, h);
+
+	let axis = mat4_project(&pinhole_vp, vec3_new(0.0, 2.0, 0.0));
+	assert(approx_eq(screen_x(axis.x, w), 18.0, tol), "principal point x respected");
+	assert(approx_eq(screen_y(axis.y, h), 13.0, tol), "principal point y respected");
+
+	let right = mat4_project(&pinhole_vp, vec3_new(0.5, 2.0, 0.0));
+	assert(approx_eq(screen_x(right.x, w), 38.0, tol), "fx controls horizontal scale");
+
+	let up = mat4_project(&pinhole_vp, vec3_new(0.0, 2.0, 0.5));
+	assert(approx_eq(screen_y(up.y, h), -2.0, tol), "fy controls vertical scale");
+
+	let legacy = freecam_new(
+		vec3_zero(),
+		vec3_new(0.0, 1.0, 0.0),
+		60.0, 0.1, 20.0);
+	let legacy_vp = freecam_view_projection(&legacy, w, h);
+	let legacy_axis = mat4_project(&legacy_vp, vec3_new(0.0, 2.0, 0.0));
+	assert(approx_eq(screen_x(legacy_axis.x, w), 32.0, tol),
+		"legacy fov path stays centered");
+	assert(approx_eq(screen_y(legacy_axis.y, h), 24.0, tol),
+		"legacy fov path keeps centered principal point");
+
+	let expected_f = ((h: f32) * 0.5) /
+		math::tan((60.0 * (math::PI / 180.0)) * 0.5);
+	let legacy_right = mat4_project(&legacy_vp, vec3_new(0.5, 2.0, 0.0));
+	assert(approx_eq(screen_x(legacy_right.x, w),
+		32.0 + expected_f * 0.25, 0.02),
+		"legacy fov resolves to the matching pinhole focal length");
+};

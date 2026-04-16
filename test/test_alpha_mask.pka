@@ -1,0 +1,230 @@
+// test_alpha_mask.pka — Verify alpha-cutout textures mask flat, constant, and depth passes.
+
+use fb;
+
+fn fill_split_alpha_rgba(data: []u8, w: i32, h: i32,
+	r: u8, g: u8, b: u8,
+	left_a: u8, right_a: u8) void = {
+	for (let py: i32 = 0; py < h; py += 1) {
+		for (let px: i32 = 0; px < w; px += 1) {
+			let idx: size = ((py * w + px) * 4): size;
+			let alpha = right_a;
+			if (px < (w / 2)) {
+				alpha = left_a;
+			};
+			data[idx] = r;
+			data[idx + 1z] = g;
+			data[idx + 2z] = b;
+			data[idx + 3z] = alpha;
+		};
+	};
+};
+
+fn count_rgb_region(pixels: []u8, w: i32,
+	x0: i32, y0: i32, x1: i32, y1: i32,
+	r_min: u8, r_max: u8,
+	g_min: u8, g_max: u8,
+	b_min: u8, b_max: u8) i32 = {
+	let count: i32 = 0;
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			let idx: size = ((py * w + px) * 3): size;
+			let r = pixels[idx];
+			let g = pixels[idx + 1z];
+			let b = pixels[idx + 2z];
+			if (r >= r_min && r <= r_max &&
+				g >= g_min && g <= g_max &&
+				b >= b_min && b <= b_max) {
+				count = count + 1;
+			};
+		};
+	};
+	return count;
+};
+
+fn count_depth_region(depth: []f32, w: i32,
+	x0: i32, y0: i32, x1: i32, y1: i32,
+	min_depth: f32) i32 = {
+	let count: i32 = 0;
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			let idx: size = (py * w + px): size;
+			if (depth[idx] > min_depth) {
+				count = count + 1;
+			};
+		};
+	};
+	return count;
+};
+
+fn max_depth_region(depth: []f32, w: i32,
+	x0: i32, y0: i32, x1: i32, y1: i32) f32 = {
+	let maxv: f32 = 0.0;
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			let idx: size = (py * w + px): size;
+			let dv = depth[idx];
+			if (dv > maxv) {
+				maxv = dv;
+			};
+		};
+	};
+	return maxv;
+};
+
+fn assert_mask_split(visible: i32, hidden: i32, mode: i32) void = {
+	let tbuf: [160]u8 = [0...];
+	let tf = fb::New(tbuf[0z..160z]);
+	fb::Write(&tf, "  ");
+	if (mode == 0) {
+		fb::Write(&tf, "constant");
+	} else if (mode == 1) {
+		fb::Write(&tf, "depth");
+	} else {
+		fb::Write(&tf, "flat");
+	};
+	fb::Write(&tf, " visible=");
+	fb::Wi64(&tf, visible: i64);
+	fb::Write(&tf, " hidden=");
+	fb::Wi64(&tf, hidden: i64);
+	fb::Println(&tf);
+	assert(visible > 500, "opaque half has strong coverage");
+	assert(hidden * 5 < visible, "transparent half stays cut out");
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_alpha_mask ===");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 128, 96);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	let plane = mesh_create_plane();
+	let gpu_plane = util_mesh_upload(&plane);
+	assert(gpu_plane.valid, "gpu plane valid");
+
+	let texels: [256]u8 = [0...];
+	fill_split_alpha_rgba(texels[0z..], 8, 8, 0u8, 255u8, 0u8, 255u8, 0u8);
+	let alpha_tex = e2_gpu_texture_create_rgba(texels[0z..], 8, 8);
+	assert(alpha_tex.valid, "rgba alpha texture valid");
+
+	let geom_pass = util_geom_pass_init();
+	let scale = mat4_scale(2.4, 2.4, 2.4);
+	let rotate = mat4_rotate_x(90.0);
+	let model = mat4_mul(&rotate, &scale);
+	let cutout_mat = material_flat(color_green());
+	cutout_mat.texture = alpha_tex.handle;
+	util_geom_pass_add(&geom_pass, &gpu_plane, model, cutout_mat);
+	assert(geom_pass.count == 1, "one cutout draw");
+
+	let cam = freecam_new(
+		vec3_new(0.0, -1.5, 2.1),
+		vec3_new(0.0, 0.0, 0.0),
+		42.0, 0.1, 20.0);
+	let lights = util_light_buffer_init();
+	util_light_buffer_clear(&lights);
+	util_light_buffer_add(&lights,
+		light_directional(vec3_new(0.0, 0.0, 1.0), color_white()));
+	let env = env_default();
+	let empty = util_color_pass_init();
+
+	let out_rgb: [36864]u8 = [0...];
+	let out_depth: [12288]f32 = [0.0...];
+	let ok = e2_render_camera_to_buffers(&cam, E2_GEOM_MODE_CONSTANT_COLOR,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		util_light_buffer_slice(&lights),
+		&env,
+		out_rgb[0z..],
+		out_depth[0z..],
+		128, 96);
+	assert(ok, "constant color cutout render ok");
+
+	let const_left = count_rgb_region(out_rgb[0z..], 128,
+		20, 24, 52, 72,
+		0u8, 15u8,
+		240u8, 255u8,
+		0u8, 15u8);
+	let const_right = count_rgb_region(out_rgb[0z..], 128,
+		76, 24, 108, 72,
+		0u8, 15u8,
+		240u8, 255u8,
+		0u8, 15u8);
+	let const_visible = const_left;
+	let const_hidden = const_right;
+	if (const_right > const_left) {
+		const_visible = const_right;
+		const_hidden = const_left;
+	};
+	assert_mask_split(const_visible, const_hidden, 0);
+
+	let depth_left_max = max_depth_region(out_depth[0z..], 128,
+		20, 24, 52, 72);
+	let depth_right_max = max_depth_region(out_depth[0z..], 128,
+		76, 24, 108, 72);
+	let depth_visible_max = depth_left_max;
+	let depth_hidden_max = depth_right_max;
+	if (depth_right_max > depth_left_max) {
+		depth_visible_max = depth_right_max;
+		depth_hidden_max = depth_left_max;
+	};
+	let depth_threshold = depth_hidden_max +
+		((depth_visible_max - depth_hidden_max) * 0.5);
+	let depth_left = count_depth_region(out_depth[0z..], 128,
+		20, 24, 52, 72, depth_threshold);
+	let depth_right = count_depth_region(out_depth[0z..], 128,
+		76, 24, 108, 72, depth_threshold);
+	let depth_visible = depth_left;
+	let depth_hidden = depth_right;
+	if (depth_right > depth_left) {
+		depth_visible = depth_right;
+		depth_hidden = depth_left;
+	};
+	let depth_buf: [192]u8 = [0...];
+	let depth_tf = fb::New(depth_buf[0z..192z]);
+	fb::Write(&depth_tf, "  depth max left=");
+	fb::Wf64(&depth_tf, depth_left_max: f64, 4, "dec");
+	fb::Write(&depth_tf, " right=");
+	fb::Wf64(&depth_tf, depth_right_max: f64, 4, "dec");
+	fb::Write(&depth_tf, " threshold=");
+	fb::Wf64(&depth_tf, depth_threshold: f64, 4, "dec");
+	fb::Println(&depth_tf);
+	assert(depth_visible_max > depth_hidden_max + 0.02,
+		"depth output separates opaque and transparent halves");
+	assert_mask_split(depth_visible, depth_hidden, 1);
+
+	let no_depth: [1]f32 = [0.0];
+	let ok_flat = e2_render_camera_to_buffers(&cam, E2_GEOM_MODE_FLAT,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		util_light_buffer_slice(&lights),
+		&env,
+		out_rgb[0z..],
+		no_depth[0z..0z],
+		128, 96);
+	assert(ok_flat, "flat cutout render ok");
+
+	let flat_left = count_rgb_region(out_rgb[0z..], 128,
+		20, 24, 52, 72,
+		0u8, 15u8,
+		240u8, 255u8,
+		0u8, 15u8);
+	let flat_right = count_rgb_region(out_rgb[0z..], 128,
+		76, 24, 108, 72,
+		0u8, 15u8,
+		240u8, 255u8,
+		0u8, 15u8);
+	let flat_visible = flat_left;
+	let flat_hidden = flat_right;
+	if (flat_right > flat_left) {
+		flat_visible = flat_right;
+		flat_hidden = flat_left;
+	};
+	assert_mask_split(flat_visible, flat_hidden, 2);
+
+	e2_gpu_texture_destroy(&alpha_tex);
+	e2_gpu_mesh_destroy(&gpu_plane);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_alpha_mask passed ===");
+};

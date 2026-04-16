@@ -1,0 +1,121 @@
+// test_object_draw_colors.pka — Verify object draw calls preserve per-draw colors.
+// Renders two explicit geom draws with the constant-color pass and checks
+// that each object writes the expected color into its side of the image.
+
+use fb;
+
+fn count_rgb_region(pixels: []u8, w: i32,
+	x0: i32, y0: i32, x1: i32, y1: i32,
+	r_min: u8, r_max: u8,
+	g_min: u8, g_max: u8,
+	b_min: u8, b_max: u8) i32 = {
+	let count: i32 = 0;
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			let idx: size = ((py * w + px) * 3): size;
+			let r = pixels[idx];
+			let g = pixels[idx + 1z];
+			let b = pixels[idx + 2z];
+			if (r >= r_min && r <= r_max &&
+				g >= g_min && g <= g_max &&
+				b >= b_min && b <= b_max) {
+				count = count + 1;
+			};
+		};
+	};
+	return count;
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_object_draw_colors ===");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 128, 96);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	let box = mesh_create_box();
+	let gpu_box = util_mesh_upload(&box);
+	assert(gpu_box.valid, "gpu box valid");
+
+	let geom_pass = util_geom_pass_init();
+	let scale = mat4_scale(0.9, 0.9, 0.9);
+	let left_t = mat4_translate(-0.85, 0.0, 0.5);
+	let right_t = mat4_translate(0.85, 0.0, 0.5);
+	let left_model = mat4_mul(&left_t, &scale);
+	let right_model = mat4_mul(&right_t, &scale);
+
+	util_geom_pass_add(&geom_pass, &gpu_box, left_model, material_flat(color_red()));
+	util_geom_pass_add(&geom_pass, &gpu_box, right_model, material_flat(color_blue()));
+	assert(geom_pass.count == 2, "two object draw calls");
+
+	let cam = freecam_new(
+		vec3_new(0.0, -3.5, 1.1),
+		vec3_new(0.0, 0.0, 0.5),
+		50.0, 0.1, 20.0);
+	let lights = util_light_buffer_init();
+	let env = env_default();
+	let empty = util_color_pass_init();
+
+	let out_rgb: [36864]u8 = [0...];
+	let no_depth: [1]f32 = [0.0];
+	let ok = e2_render_camera_to_buffers(&cam, E2_GEOM_MODE_CONSTANT_COLOR,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		util_light_buffer_slice(&lights),
+		&env,
+		out_rgb[0z..],
+		no_depth[0z..0z],
+		128, 96);
+	assert(ok, "constant color camera render ok");
+
+	let left_red = count_rgb_region(out_rgb[0z..], 128,
+		0, 0, 64, 96,
+		240u8, 255u8,
+		0u8, 15u8,
+		0u8, 15u8);
+	let left_blue = count_rgb_region(out_rgb[0z..], 128,
+		0, 0, 64, 96,
+		0u8, 15u8,
+		0u8, 15u8,
+		240u8, 255u8);
+	let right_red = count_rgb_region(out_rgb[0z..], 128,
+		64, 0, 128, 96,
+		240u8, 255u8,
+		0u8, 15u8,
+		0u8, 15u8);
+	let right_blue = count_rgb_region(out_rgb[0z..], 128,
+		64, 0, 128, 96,
+		0u8, 15u8,
+		0u8, 15u8,
+		240u8, 255u8);
+
+	let tbuf: [192]u8 = [0...];
+	let tf = fb::New(tbuf[0z..192z]);
+	fb::Write(&tf, "  left red=");
+	fb::Wi64(&tf, left_red: i64);
+	fb::Write(&tf, " left blue=");
+	fb::Wi64(&tf, left_blue: i64);
+	fb::Write(&tf, " right red=");
+	fb::Wi64(&tf, right_red: i64);
+	fb::Write(&tf, " right blue=");
+	fb::Wi64(&tf, right_blue: i64);
+	fb::Println(&tf);
+
+	let screen_matches_draw_order = left_red + right_blue;
+	let screen_matches_flipped = left_blue + right_red;
+	if (screen_matches_draw_order >= screen_matches_flipped) {
+		assert(left_red > 250, "one half produced red output");
+		assert(right_blue > 250, "other half produced blue output");
+		assert(left_blue < 40, "red half does not bleed blue");
+		assert(right_red < 40, "blue half does not bleed red");
+	} else {
+		assert(left_blue > 250, "one half produced blue output");
+		assert(right_red > 250, "other half produced red output");
+		assert(left_red < 40, "blue half does not bleed red");
+		assert(right_blue < 40, "red half does not bleed blue");
+	};
+
+	e2_gpu_mesh_destroy(&gpu_box);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_object_draw_colors passed ===");
+};

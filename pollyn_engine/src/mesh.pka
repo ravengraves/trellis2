@@ -3,12 +3,16 @@
 
 use math;
 
-// Vertex: 8 floats (px, py, pz, nx, ny, nz, u, v)
-def VERT_STRIDE: i32 = 8;
+// Vertex: 12 floats (px, py, pz, nx, ny, nz, u, v, tx, ty, tz, tw)
+// Tangent is xyz plus handedness w for reconstructing bitangent.
+def VERT_STRIDE: i32 = 12;
+def LEGACY_VERT_STRIDE: size = 8z;
+def VERT_UV_OFFSET: size = 6z;
+def VERT_TANGENT_OFFSET: size = 8z;
 
 // Max mesh sizes (stack-allocated)
 def MAX_VERTS: size = 4096z;
-def MAX_FLOATS: size = 32768z; // MAX_VERTS * 8
+def MAX_FLOATS: size = 49152z; // MAX_VERTS * 12
 def MAX_INDICES: size = 24576z;
 
 export type Mesh = struct {
@@ -27,12 +31,145 @@ export fn mesh_init() Mesh = {
 	};
 };
 
+fn mesh_fallback_tangent(normal: Vec3) Vec3 = {
+	let ref = vec3_new(0.0, 0.0, 1.0);
+	if (normal.z > 0.9 || normal.z < -0.9) {
+		ref = vec3_new(0.0, 1.0, 0.0);
+	};
+	let tangent = vec3_cross(ref, normal);
+	if (vec3_length(tangent) < 0.0001) {
+		tangent = vec3_cross(vec3_new(1.0, 0.0, 0.0), normal);
+	};
+	return vec3_normalize(tangent);
+};
+
+fn mesh_generate_tangents(m: *Mesh) void = {
+	if (m.vert_count <= 0 || m.index_count < 3) { return; };
+
+	let tan1x: [MAX_VERTS]f32 = [0.0...];
+	let tan1y: [MAX_VERTS]f32 = [0.0...];
+	let tan1z: [MAX_VERTS]f32 = [0.0...];
+	let tan2x: [MAX_VERTS]f32 = [0.0...];
+	let tan2y: [MAX_VERTS]f32 = [0.0...];
+	let tan2z: [MAX_VERTS]f32 = [0.0...];
+
+	for (let ti: i32 = 0; ti + 2 < m.index_count; ti += 3) {
+		let i0 = m.indices[ti: size]: i32;
+		let i1 = m.indices[(ti + 1): size]: i32;
+		let i2 = m.indices[(ti + 2): size]: i32;
+		if (i0 < 0 || i1 < 0 || i2 < 0 ||
+			i0 >= m.vert_count || i1 >= m.vert_count || i2 >= m.vert_count) {
+			continue;
+		};
+
+		let b0: size = (i0 * VERT_STRIDE): size;
+		let b1: size = (i1 * VERT_STRIDE): size;
+		let b2: size = (i2 * VERT_STRIDE): size;
+		let p0 = vec3_new(m.verts[b0], m.verts[b0 + 1z], m.verts[b0 + 2z]);
+		let p1 = vec3_new(m.verts[b1], m.verts[b1 + 1z], m.verts[b1 + 2z]);
+		let p2 = vec3_new(m.verts[b2], m.verts[b2 + 1z], m.verts[b2 + 2z]);
+		let e1 = vec3_sub(p1, p0);
+		let e2 = vec3_sub(p2, p0);
+
+		let u0 = m.verts[b0 + VERT_UV_OFFSET];
+		let v0 = m.verts[b0 + VERT_UV_OFFSET + 1z];
+		let u1 = m.verts[b1 + VERT_UV_OFFSET];
+		let v1 = m.verts[b1 + VERT_UV_OFFSET + 1z];
+		let u2 = m.verts[b2 + VERT_UV_OFFSET];
+		let v2 = m.verts[b2 + VERT_UV_OFFSET + 1z];
+
+		let du1 = u1 - u0;
+		let dv1 = v1 - v0;
+		let du2 = u2 - u0;
+		let dv2 = v2 - v0;
+		let denom = du1 * dv2 - dv1 * du2;
+
+		let sdir = vec3_zero();
+		let tdir = vec3_zero();
+		if (denom > 0.00001 || denom < -0.00001) {
+			let r = math::recip(denom);
+			sdir = vec3_scale(
+				vec3_sub(vec3_scale(e1, dv2), vec3_scale(e2, dv1)), r);
+			tdir = vec3_scale(
+				vec3_sub(vec3_scale(e2, du1), vec3_scale(e1, du2)), r);
+		} else {
+			let face = vec3_cross(e1, e2);
+			if (vec3_length(face) > 0.0001) {
+				let n = vec3_normalize(face);
+				sdir = mesh_fallback_tangent(n);
+				tdir = vec3_cross(n, sdir);
+			};
+		};
+
+		tan1x[i0: size] = tan1x[i0: size] + sdir.x;
+		tan1y[i0: size] = tan1y[i0: size] + sdir.y;
+		tan1z[i0: size] = tan1z[i0: size] + sdir.z;
+		tan1x[i1: size] = tan1x[i1: size] + sdir.x;
+		tan1y[i1: size] = tan1y[i1: size] + sdir.y;
+		tan1z[i1: size] = tan1z[i1: size] + sdir.z;
+		tan1x[i2: size] = tan1x[i2: size] + sdir.x;
+		tan1y[i2: size] = tan1y[i2: size] + sdir.y;
+		tan1z[i2: size] = tan1z[i2: size] + sdir.z;
+
+		tan2x[i0: size] = tan2x[i0: size] + tdir.x;
+		tan2y[i0: size] = tan2y[i0: size] + tdir.y;
+		tan2z[i0: size] = tan2z[i0: size] + tdir.z;
+		tan2x[i1: size] = tan2x[i1: size] + tdir.x;
+		tan2y[i1: size] = tan2y[i1: size] + tdir.y;
+		tan2z[i1: size] = tan2z[i1: size] + tdir.z;
+		tan2x[i2: size] = tan2x[i2: size] + tdir.x;
+		tan2y[i2: size] = tan2y[i2: size] + tdir.y;
+		tan2z[i2: size] = tan2z[i2: size] + tdir.z;
+	};
+
+	for (let vi: i32 = 0; vi < m.vert_count; vi += 1) {
+		let base: size = (vi * VERT_STRIDE): size;
+		let normal = vec3_new(m.verts[base + 3z], m.verts[base + 4z], m.verts[base + 5z]);
+		let tangent = vec3_new(tan1x[vi: size], tan1y[vi: size], tan1z[vi: size]);
+		tangent = vec3_sub(tangent, vec3_scale(normal, vec3_dot(normal, tangent)));
+		if (vec3_length(tangent) < 0.0001) {
+			tangent = mesh_fallback_tangent(normal);
+		} else {
+			tangent = vec3_normalize(tangent);
+		};
+
+		let bitangent_ref = vec3_new(tan2x[vi: size], tan2y[vi: size], tan2z[vi: size]);
+		let handedness = 1.0;
+		if (vec3_dot(vec3_cross(normal, tangent), bitangent_ref) < 0.0) {
+			handedness = -1.0;
+		};
+
+		m.verts[base + VERT_TANGENT_OFFSET] = tangent.x;
+		m.verts[base + VERT_TANGENT_OFFSET + 1z] = tangent.y;
+		m.verts[base + VERT_TANGENT_OFFSET + 2z] = tangent.z;
+		m.verts[base + VERT_TANGENT_OFFSET + 3z] = handedness;
+	};
+};
+
 // Build a mesh from user-provided interleaved vertex/index buffers.
-// Vertex layout must be [px, py, pz, nx, ny, nz] with stride 6 floats.
+// Accepted layouts are [px,py,pz,nx,ny,nz,u,v] and
+// [px,py,pz,nx,ny,nz,u,v,tx,ty,tz,tw].
 export fn mesh_from_buffers(vertex_data: []f32, index_data: []u16) Mesh = {
 	let m = mesh_init();
 
-	let stride: size = VERT_STRIDE: size;
+	let stride: size = LEGACY_VERT_STRIDE;
+	let max_idx: i32 = -1;
+	for (let i: size = 0z; i < index_data.len; i += 1z) {
+		let probe_idx = index_data[i]: i32;
+		if (probe_idx > max_idx) {
+			max_idx = probe_idx;
+		};
+	};
+	let legacy_count: i32 = (vertex_data.len / LEGACY_VERT_STRIDE): i32;
+	let tangent_count: i32 = (vertex_data.len / (VERT_STRIDE: size)): i32;
+	let can_tangent =
+		vertex_data.len >= (VERT_STRIDE: size) &&
+		(vertex_data.len % (VERT_STRIDE: size)) == 0z &&
+		max_idx < tangent_count;
+	let can_legacy = legacy_count > 0 && max_idx < legacy_count;
+	if (can_tangent && !can_legacy) {
+		stride = VERT_STRIDE: size;
+	};
 	let vert_floats = vertex_data.len;
 	if (vert_floats > MAX_FLOATS) {
 		vert_floats = MAX_FLOATS;
@@ -45,8 +182,22 @@ export fn mesh_from_buffers(vertex_data: []f32, index_data: []u16) Mesh = {
 		ic_max = MAX_INDICES;
 	};
 
-	for (let i: size = 0z; i < vert_floats; i += 1z) {
-		m.verts[i] = vertex_data[i];
+	for (let vi: i32 = 0; vi < vc; vi += 1) {
+		let src_base: size = (vi: size) * stride;
+		let dst_base: size = (vi * VERT_STRIDE): size;
+		for (let j: size = 0z; j < LEGACY_VERT_STRIDE; j += 1z) {
+			m.verts[dst_base + j] = vertex_data[src_base + j];
+		};
+		m.verts[dst_base + VERT_TANGENT_OFFSET] = 1.0;
+		m.verts[dst_base + VERT_TANGENT_OFFSET + 1z] = 0.0;
+		m.verts[dst_base + VERT_TANGENT_OFFSET + 2z] = 0.0;
+		m.verts[dst_base + VERT_TANGENT_OFFSET + 3z] = 1.0;
+		if (stride >= (VERT_STRIDE: size)) {
+			m.verts[dst_base + VERT_TANGENT_OFFSET] = vertex_data[src_base + VERT_TANGENT_OFFSET];
+			m.verts[dst_base + VERT_TANGENT_OFFSET + 1z] = vertex_data[src_base + VERT_TANGENT_OFFSET + 1z];
+			m.verts[dst_base + VERT_TANGENT_OFFSET + 2z] = vertex_data[src_base + VERT_TANGENT_OFFSET + 2z];
+			m.verts[dst_base + VERT_TANGENT_OFFSET + 3z] = vertex_data[src_base + VERT_TANGENT_OFFSET + 3z];
+		};
 	};
 	m.vert_count = vc;
 
@@ -59,6 +210,9 @@ export fn mesh_from_buffers(vertex_data: []f32, index_data: []u16) Mesh = {
 		};
 	};
 	m.index_count = ic;
+	if (stride < (VERT_STRIDE: size)) {
+		mesh_generate_tangents(&m);
+	};
 
 	return m;
 };
@@ -100,7 +254,7 @@ export fn mesh_decimate(src: *Mesh, target_triangles: i32) Mesh = {
 fn mesh_add_vert(m: *Mesh, px: f32, py: f32, pz: f32,
 	nx: f32, ny: f32, nz: f32, u: f32, v: f32) void = {
 	let base: size = (m.vert_count * VERT_STRIDE): size;
-	if (base + 7z >= MAX_FLOATS) { return; };
+	if (base + ((VERT_STRIDE: size) - 1z) >= MAX_FLOATS) { return; };
 	m.verts[base]      = px;
 	m.verts[base + 1z] = py;
 	m.verts[base + 2z] = pz;
@@ -109,6 +263,10 @@ fn mesh_add_vert(m: *Mesh, px: f32, py: f32, pz: f32,
 	m.verts[base + 5z] = nz;
 	m.verts[base + 6z] = u;
 	m.verts[base + 7z] = v;
+	m.verts[base + VERT_TANGENT_OFFSET] = 1.0;
+	m.verts[base + VERT_TANGENT_OFFSET + 1z] = 0.0;
+	m.verts[base + VERT_TANGENT_OFFSET + 2z] = 0.0;
+	m.verts[base + VERT_TANGENT_OFFSET + 3z] = 1.0;
 	m.vert_count = m.vert_count + 1;
 };
 
@@ -165,6 +323,7 @@ export fn mesh_create_box() Mesh = {
 	mesh_add_vert(&m,  0.5, -0.5,  0.5,  0.0, -1.0,  0.0, 1.0, 1.0);
 	mesh_add_vert(&m, -0.5, -0.5,  0.5,  0.0, -1.0,  0.0, 0.0, 1.0);
 	mesh_add_tri(&m, 20, 21, 22); mesh_add_tri(&m, 20, 22, 23);
+	mesh_generate_tangents(&m);
 	return m;
 };
 
@@ -180,6 +339,7 @@ export fn mesh_create_plane() Mesh = {
 	mesh_add_vert(&m, -0.5, 0.0,  0.5, 0.0, 1.0, 0.0, 0.0, 1.0);
 	mesh_add_tri(&m, 0, 1, 2);
 	mesh_add_tri(&m, 0, 2, 3);
+	mesh_generate_tangents(&m);
 	return m;
 };
 
@@ -222,6 +382,7 @@ export fn mesh_create_sphere(slices: i32, stacks: i32) Mesh = {
 			mesh_add_tri(&m, sa, sc, sd);
 		};
 	};
+	mesh_generate_tangents(&m);
 	return m;
 };
 
@@ -279,6 +440,7 @@ export fn mesh_create_cylinder(slices: i32) Mesh = {
 		mesh_add_tri(&m, bot_center, bot_start + ((bi + 1): u16), bot_start + (bi: u16));
 	};
 
+	mesh_generate_tangents(&m);
 	return m;
 };
 
@@ -299,8 +461,9 @@ export fn mesh_create_cylinder(slices: i32) Mesh = {
 export fn mesh_load_stl(filename: *u8) Mesh = {
 	let m = mesh_init();
 	shim_load_stl(filename, &m.verts[0z], &m.indices[0z],
-	              &m.vert_count, &m.index_count,
-	              MAX_VERTS: i32, MAX_INDICES: i32);
+		              &m.vert_count, &m.index_count,
+		              MAX_VERTS: i32, MAX_INDICES: i32);
+	mesh_generate_tangents(&m);
 	return m;
 };
 
@@ -308,8 +471,9 @@ export fn mesh_load_stl(filename: *u8) Mesh = {
 export fn mesh_load_stl_raw(filename: *u8) Mesh = {
 	let m = mesh_init();
 	shim_load_stl_raw(filename, &m.verts[0z], &m.indices[0z],
-	                  &m.vert_count, &m.index_count,
-	                  MAX_VERTS: i32, MAX_INDICES: i32);
+		                  &m.vert_count, &m.index_count,
+		                  MAX_VERTS: i32, MAX_INDICES: i32);
+	mesh_generate_tangents(&m);
 	return m;
 };
 

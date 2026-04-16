@@ -1,0 +1,215 @@
+// test_pbr_orm.pka — Verify PBR ORM textures affect AO, roughness, and metallic.
+
+use fb;
+
+type AvgRgb = struct {
+	r: f32,
+	g: f32,
+	b: f32,
+};
+
+fn fill_split_texture(data: []u8, w: i32, h: i32,
+	left_r: u8, left_g: u8, left_b: u8,
+	right_r: u8, right_g: u8, right_b: u8) void = {
+	for (let py: i32 = 0; py < h; py += 1) {
+		for (let px: i32 = 0; px < w; px += 1) {
+			let idx: size = ((py * w + px) * 3): size;
+			if (px < (w / 2)) {
+				data[idx] = left_r;
+				data[idx + 1z] = left_g;
+				data[idx + 2z] = left_b;
+			} else {
+				data[idx] = right_r;
+				data[idx + 1z] = right_g;
+				data[idx + 2z] = right_b;
+			};
+		};
+	};
+};
+
+fn region_avg_rgb(pixels: []u8, w: i32,
+	x0: i32, y0: i32, x1: i32, y1: i32) AvgRgb = {
+	let sum_r: i32 = 0;
+	let sum_g: i32 = 0;
+	let sum_b: i32 = 0;
+	let count: i32 = 0;
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			let idx: size = ((py * w + px) * 3): size;
+			sum_r = sum_r + (pixels[idx]: i32);
+			sum_g = sum_g + (pixels[idx + 1z]: i32);
+			sum_b = sum_b + (pixels[idx + 2z]: i32);
+			count = count + 1;
+		};
+	};
+	let denom = count: f32;
+	return AvgRgb {
+		r = (sum_r: f32) / denom,
+		g = (sum_g: f32) / denom,
+		b = (sum_b: f32) / denom,
+	};
+};
+
+fn region_luma(avg: AvgRgb) f32 = {
+	return (avg.r + avg.g + avg.b) / 3.0;
+};
+
+fn render_plane(rt: *E2Runtime, draws: []E2GeomDraw,
+	cam: *FreeCamera, lights: []Light, env: *IrradianceEnv,
+	out_rgb: []u8, w: i32, h: i32) void = {
+	let empty = util_color_pass_init();
+	let no_depth: [1]f32 = [0.0];
+	let ok = e2_render_camera_to_buffers(cam, E2_GEOM_MODE_PBR,
+		draws,
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		lights,
+		env,
+		out_rgb,
+		no_depth[0z..0z],
+		w, h);
+	assert(ok, "pbr orm render ok");
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_pbr_orm ===");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 128, 96);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	let plane = mesh_create_plane();
+	let gpu_plane = util_mesh_upload(&plane);
+	assert(gpu_plane.valid, "gpu plane valid");
+
+	let geom_pass = util_geom_pass_init();
+	let scale = mat4_scale(2.4, 2.4, 2.4);
+	let rotate = mat4_rotate_x(90.0);
+	let model = mat4_mul(&rotate, &scale);
+	util_geom_pass_add(&geom_pass, &gpu_plane, model, material_pbr(color_white(), 0.0, 1.0));
+	assert(geom_pass.count == 1, "one draw");
+
+	let cam = freecam_new(
+		vec3_new(0.0, -1.5, 2.1),
+		vec3_new(0.0, 0.0, 0.0),
+		42.0, 0.1, 20.0);
+
+	let lights = util_light_buffer_init();
+	util_light_buffer_clear(&lights);
+	util_light_buffer_add(&lights,
+		light_directional(vec3_new(0.0, 1.0, 0.0), color_black()));
+
+	let out_rgb: [36864]u8 = [0...];
+	let tbuf: [256]u8 = [0...];
+	let tf = fb::New(tbuf[0z..256z]);
+
+	// AO-only check: left half AO=0, right half AO=1.
+	let ao_env = IrradianceEnv {
+		sky_color = color_white(),
+		ground_color = color_black(),
+		horizon_color = color_gray(0.2),
+		specular_color = color_white(),
+		intensity = 3.0
+	};
+	let ao_texels: [192]u8 = [0...];
+	fill_split_texture(ao_texels[0z..], 8, 8,
+		0u8, 255u8, 0u8,
+		255u8, 255u8, 0u8);
+	let ao_tex = e2_gpu_texture_create_rgb(ao_texels[0z..], 8, 8);
+	assert(ao_tex.valid, "ao texture valid");
+
+	let ao_mat = material_pbr(color_white(), 0.0, 1.0);
+	ao_mat.orm_texture = ao_tex.handle;
+	geom_pass.draws[0z].material = ao_mat;
+	render_plane(&rt,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		&cam,
+		util_light_buffer_slice(&lights),
+		&ao_env,
+		out_rgb[0z..],
+		128, 96);
+
+	let ao_left = region_avg_rgb(out_rgb[0z..], 128, 20, 24, 52, 72);
+	let ao_right = region_avg_rgb(out_rgb[0z..], 128, 76, 24, 108, 72);
+	let ao_left_luma = region_luma(ao_left);
+	let ao_right_luma = region_luma(ao_right);
+	let screen_left_is_texture_left = ao_left_luma < ao_right_luma;
+	let ao_dark_luma = ao_left_luma;
+	let ao_bright_luma = ao_right_luma;
+	if (ao_left_luma > ao_right_luma) {
+		ao_dark_luma = ao_right_luma;
+		ao_bright_luma = ao_left_luma;
+	};
+
+	fb::Write(&tf, "  ao luma left=");
+	fb::Wf64(&tf, ao_left_luma: f64, 2, "dec");
+	fb::Write(&tf, " right=");
+	fb::Wf64(&tf, ao_right_luma: f64, 2, "dec");
+	fb::Println(&tf);
+
+	assert(ao_bright_luma > 70.0, "ao lit region bright");
+	assert(ao_dark_luma < ao_bright_luma * 0.35, "ao dark region suppressed");
+
+	e2_gpu_texture_destroy(&ao_tex);
+
+	// Roughness/metallic check:
+	// left  = AO=1 rough=1 metal=0   -> diffuse/red from sky irradiance
+	// right = AO=1 rough=0 metal=1   -> sharp metallic/blue from specular env
+	fb::Clear(&tf);
+	let rm_env = IrradianceEnv {
+		sky_color = color_new(1.0, 0.18, 0.18, 1.0),
+		ground_color = color_black(),
+		horizon_color = color_new(0.05, 0.05, 0.05, 1.0),
+		specular_color = color_new(0.12, 0.40, 1.0, 1.0),
+		intensity = 3.0
+	};
+	let rm_texels: [192]u8 = [0...];
+	fill_split_texture(rm_texels[0z..], 8, 8,
+		255u8, 255u8, 0u8,
+		255u8, 0u8, 255u8);
+	let rm_tex = e2_gpu_texture_create_rgb(rm_texels[0z..], 8, 8);
+	assert(rm_tex.valid, "rm texture valid");
+
+	let rm_mat = material_pbr(color_white(), 1.0, 1.0);
+	rm_mat.orm_texture = rm_tex.handle;
+	geom_pass.draws[0z].material = rm_mat;
+	render_plane(&rt,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		&cam,
+		util_light_buffer_slice(&lights),
+		&rm_env,
+		out_rgb[0z..],
+		128, 96);
+
+	let rm_left = region_avg_rgb(out_rgb[0z..], 128, 20, 24, 52, 72);
+	let rm_right = region_avg_rgb(out_rgb[0z..], 128, 76, 24, 108, 72);
+	let tex_left = rm_left;
+	let tex_right = rm_right;
+	if (!screen_left_is_texture_left) {
+		tex_left = rm_right;
+		tex_right = rm_left;
+	};
+
+	fb::Write(&tf, "  left rgb=(");
+	fb::Wf64(&tf, rm_left.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, rm_left.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, rm_left.b: f64, 1, "dec");
+	fb::Write(&tf, ") right rgb=(");
+	fb::Wf64(&tf, rm_right.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, rm_right.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, rm_right.b: f64, 1, "dec");
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
+
+	assert(tex_left.r > tex_left.b + 20.0, "rough dielectric side stays red/diffuse");
+	assert(tex_right.b > tex_right.r + 20.0, "smooth metallic side shifts blue/specular");
+	assert(tex_right.b > 55.0, "metallic specular visible");
+
+	e2_gpu_texture_destroy(&rm_tex);
+	e2_gpu_mesh_destroy(&gpu_plane);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_pbr_orm passed ===");
+};

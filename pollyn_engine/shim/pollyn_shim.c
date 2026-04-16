@@ -36,6 +36,14 @@ double shim_clock_ms(void) {
 #include <GLES2/gl2.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include "shaders.h"
+
+#define SHIM_MESH_FLOAT_STRIDE 12
+#define SHIM_MESH_BYTE_STRIDE 48
+#define SHIM_MESH_POS_OFFSET 0
+#define SHIM_MESH_NORM_OFFSET 12
+#define SHIM_MESH_UV_OFFSET 24
+#define SHIM_MESH_TANGENT_OFFSET 32
 
 /* ================================================================
  * EVENT RING BUFFER
@@ -899,17 +907,17 @@ void shim_gl_draw_triangles(unsigned int vbo, unsigned int ibo,
                             int attr_pos, int attr_norm,
                             int index_count) {
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    /* Position: 3 floats at offset 0, stride 32 (8 floats = pos+normal+uv) */
+    /* Position: 3 floats at offset 0, stride 48 (12 floats = pos+normal+uv+tangent) */
     if (attr_pos >= 0) {
         glEnableVertexAttribArray((GLuint)attr_pos);
         glVertexAttribPointer((GLuint)attr_pos, 3, GL_FLOAT, GL_FALSE,
-                              32, (void *)0);
+                              SHIM_MESH_BYTE_STRIDE, (void *)SHIM_MESH_POS_OFFSET);
     }
     /* Normal: 3 floats at offset 12 */
     if (attr_norm >= 0) {
         glEnableVertexAttribArray((GLuint)attr_norm);
         glVertexAttribPointer((GLuint)attr_norm, 3, GL_FLOAT, GL_FALSE,
-                              32, (void *)(intptr_t)12);
+                              SHIM_MESH_BYTE_STRIDE, (void *)(intptr_t)SHIM_MESH_NORM_OFFSET);
     }
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
     glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_SHORT, NULL);
@@ -1075,7 +1083,7 @@ void shim_gl_fbo_read_pixels_flipped(unsigned char *out_rgb, int w, int h) {
  * ================================================================ */
 
 static GLuint g_flat_prog = 0, g_pbr_prog = 0, g_cell_prog = 0, g_wire_prog = 0;
-static GLuint g_line_prog = 0, g_depth_prog = 0;
+static GLuint g_line_prog = 0, g_depth_prog = 0, g_constant_prog = 0;
 static GLuint g_text_prog = 0;
 
 /* Flat shader cached locations */
@@ -1085,16 +1093,23 @@ static GLint g_flat_u_light_dir, g_flat_u_light_color, g_flat_u_base_color;
 static GLint g_flat_u_use_texture, g_flat_u_albedo_tex;
 
 /* PBR shader cached locations */
-static GLint g_pbr_a_pos, g_pbr_a_norm, g_pbr_a_uv;
+static GLint g_pbr_a_pos, g_pbr_a_norm, g_pbr_a_uv, g_pbr_a_tangent;
 static GLint g_pbr_u_mvp, g_pbr_u_model;
-static GLint g_pbr_u_light_dir, g_pbr_u_light_color;
-static GLint g_pbr_u_light2_dir, g_pbr_u_light2_color;
+static GLint g_pbr_u_light_count;
+static GLint g_pbr_u_light_pos_type, g_pbr_u_light_dir_data, g_pbr_u_light_color;
 static GLint g_pbr_u_eye_pos;
 static GLint g_pbr_u_albedo, g_pbr_u_metallic, g_pbr_u_roughness;
 static GLint g_pbr_u_env_sky, g_pbr_u_env_ground, g_pbr_u_env_horizon;
 static GLint g_pbr_u_env_specular, g_pbr_u_env_intensity;
+static GLint g_pbr_u_env_diffuse_mix, g_pbr_u_env_specular_mix;
 static GLint g_pbr_u_alpha;
 static GLint g_pbr_u_use_texture, g_pbr_u_albedo_tex;
+static GLint g_pbr_u_use_orm_texture, g_pbr_u_orm_tex;
+static GLint g_pbr_u_use_normal_texture, g_pbr_u_normal_tex;
+static GLint g_pbr_u_use_env_global_texture, g_pbr_u_env_global_tex;
+static GLint g_pbr_u_use_env_global_blur_texture, g_pbr_u_env_global_blur_tex;
+static GLint g_pbr_u_use_env_local_texture, g_pbr_u_env_local_tex;
+static GLint g_pbr_u_use_env_local_blur_texture, g_pbr_u_env_local_blur_tex;
 
 /* Cell shader cached locations */
 static GLint g_cell_a_pos, g_cell_a_norm, g_cell_a_uv;
@@ -1113,6 +1128,12 @@ static GLint g_line_u_mvp;
 /* Depth shader cached locations */
 static GLint g_depth_a_pos, g_depth_a_uv;
 static GLint g_depth_u_mvp, g_depth_u_znear, g_depth_u_zfar;
+static GLint g_depth_u_use_texture, g_depth_u_albedo_tex;
+
+/* Constant color shader cached locations */
+static GLint g_constant_a_pos, g_constant_a_uv;
+static GLint g_constant_u_mvp, g_constant_u_color;
+static GLint g_constant_u_use_texture, g_constant_u_albedo_tex;
 
 /* Text shader cached locations + resources */
 static GLint g_text_a_pos, g_text_a_uv;
@@ -1174,11 +1195,13 @@ int shim_gl_init_shaders(unsigned char *flat_vs, unsigned char *flat_fs,
                          unsigned char *wire_vs, unsigned char *wire_fs,
                          unsigned char *line_vs, unsigned char *line_fs,
                          unsigned char *depth_vs, unsigned char *depth_fs,
+                         unsigned char *constant_vs, unsigned char *constant_fs,
                          unsigned char *text_vs, unsigned char *text_fs) {
     if (!flat_vs || !flat_fs || !pbr_vs || !pbr_fs ||
         !cell_vs || !cell_fs ||
         !wire_vs || !wire_fs ||
         !line_vs || !line_fs || !depth_vs || !depth_fs ||
+        !constant_vs || !constant_fs ||
         !text_vs || !text_fs) {
         return -1;
     }
@@ -1201,12 +1224,13 @@ int shim_gl_init_shaders(unsigned char *flat_vs, unsigned char *flat_fs,
     g_pbr_a_pos       = glGetAttribLocation(g_pbr_prog, "a_pos");
     g_pbr_a_norm      = glGetAttribLocation(g_pbr_prog, "a_norm");
     g_pbr_a_uv        = glGetAttribLocation(g_pbr_prog, "a_uv");
+    g_pbr_a_tangent   = glGetAttribLocation(g_pbr_prog, "a_tangent");
     g_pbr_u_mvp       = glGetUniformLocation(g_pbr_prog, "u_mvp");
     g_pbr_u_model     = glGetUniformLocation(g_pbr_prog, "u_model");
-    g_pbr_u_light_dir    = glGetUniformLocation(g_pbr_prog, "u_light_dir");
-    g_pbr_u_light_color  = glGetUniformLocation(g_pbr_prog, "u_light_color");
-    g_pbr_u_light2_dir   = glGetUniformLocation(g_pbr_prog, "u_light2_dir");
-    g_pbr_u_light2_color = glGetUniformLocation(g_pbr_prog, "u_light2_color");
+    g_pbr_u_light_count  = glGetUniformLocation(g_pbr_prog, "u_light_count");
+    g_pbr_u_light_pos_type = glGetUniformLocation(g_pbr_prog, "u_light_pos_type[0]");
+    g_pbr_u_light_dir_data = glGetUniformLocation(g_pbr_prog, "u_light_dir_data[0]");
+    g_pbr_u_light_color    = glGetUniformLocation(g_pbr_prog, "u_light_color[0]");
     g_pbr_u_eye_pos      = glGetUniformLocation(g_pbr_prog, "u_eye_pos");
     g_pbr_u_albedo       = glGetUniformLocation(g_pbr_prog, "u_albedo");
     g_pbr_u_metallic     = glGetUniformLocation(g_pbr_prog, "u_metallic");
@@ -1216,9 +1240,31 @@ int shim_gl_init_shaders(unsigned char *flat_vs, unsigned char *flat_fs,
     g_pbr_u_env_horizon  = glGetUniformLocation(g_pbr_prog, "u_env_horizon");
     g_pbr_u_env_specular = glGetUniformLocation(g_pbr_prog, "u_env_specular");
     g_pbr_u_env_intensity= glGetUniformLocation(g_pbr_prog, "u_env_intensity");
+    g_pbr_u_env_diffuse_mix = glGetUniformLocation(g_pbr_prog, "u_env_diffuse_mix");
+    g_pbr_u_env_specular_mix = glGetUniformLocation(g_pbr_prog, "u_env_specular_mix");
     g_pbr_u_alpha        = glGetUniformLocation(g_pbr_prog, "u_alpha");
     g_pbr_u_use_texture  = glGetUniformLocation(g_pbr_prog, "u_use_texture");
     g_pbr_u_albedo_tex   = glGetUniformLocation(g_pbr_prog, "u_albedo_tex");
+    g_pbr_u_use_orm_texture = glGetUniformLocation(g_pbr_prog, "u_use_orm_texture");
+    g_pbr_u_orm_tex      = glGetUniformLocation(g_pbr_prog, "u_orm_tex");
+    g_pbr_u_use_normal_texture = glGetUniformLocation(g_pbr_prog, "u_use_normal_texture");
+    g_pbr_u_normal_tex   = glGetUniformLocation(g_pbr_prog, "u_normal_tex");
+    g_pbr_u_use_env_global_texture =
+        glGetUniformLocation(g_pbr_prog, "u_use_env_global_texture");
+    g_pbr_u_env_global_tex =
+        glGetUniformLocation(g_pbr_prog, "u_env_global_tex");
+    g_pbr_u_use_env_global_blur_texture =
+        glGetUniformLocation(g_pbr_prog, "u_use_env_global_blur_texture");
+    g_pbr_u_env_global_blur_tex =
+        glGetUniformLocation(g_pbr_prog, "u_env_global_blur_tex");
+    g_pbr_u_use_env_local_texture =
+        glGetUniformLocation(g_pbr_prog, "u_use_env_local_texture");
+    g_pbr_u_env_local_tex =
+        glGetUniformLocation(g_pbr_prog, "u_env_local_tex");
+    g_pbr_u_use_env_local_blur_texture =
+        glGetUniformLocation(g_pbr_prog, "u_use_env_local_blur_texture");
+    g_pbr_u_env_local_blur_tex =
+        glGetUniformLocation(g_pbr_prog, "u_env_local_blur_tex");
 
     g_cell_prog = compile_prog((const char *)cell_vs, (const char *)cell_fs);
     if (!g_cell_prog) return -1;
@@ -1252,6 +1298,17 @@ int shim_gl_init_shaders(unsigned char *flat_vs, unsigned char *flat_fs,
     g_depth_u_mvp  = glGetUniformLocation(g_depth_prog, "u_mvp");
     g_depth_u_znear = glGetUniformLocation(g_depth_prog, "u_znear");
     g_depth_u_zfar  = glGetUniformLocation(g_depth_prog, "u_zfar");
+    g_depth_u_use_texture = glGetUniformLocation(g_depth_prog, "u_use_texture");
+    g_depth_u_albedo_tex  = glGetUniformLocation(g_depth_prog, "u_albedo_tex");
+
+    g_constant_prog = compile_prog((const char *)constant_vs, (const char *)constant_fs);
+    if (!g_constant_prog) return -1;
+    g_constant_a_pos = glGetAttribLocation(g_constant_prog, "a_pos");
+    g_constant_a_uv = glGetAttribLocation(g_constant_prog, "a_uv");
+    g_constant_u_mvp = glGetUniformLocation(g_constant_prog, "u_mvp");
+    g_constant_u_color = glGetUniformLocation(g_constant_prog, "u_color");
+    g_constant_u_use_texture = glGetUniformLocation(g_constant_prog, "u_use_texture");
+    g_constant_u_albedo_tex = glGetUniformLocation(g_constant_prog, "u_albedo_tex");
 
     g_text_prog = compile_prog((const char *)text_vs, (const char *)text_fs);
     if (!g_text_prog) return -1;
@@ -1265,6 +1322,18 @@ int shim_gl_init_shaders(unsigned char *flat_vs, unsigned char *flat_fs,
     }
 
     return 0;
+}
+
+int shim_gl_init_embedded_shaders(void) {
+    return shim_gl_init_shaders(
+        (unsigned char *)FLAT_VS, (unsigned char *)FLAT_FS,
+        (unsigned char *)PBR_VS, (unsigned char *)PBR_FS,
+        (unsigned char *)CELL_VS, (unsigned char *)CELL_FS,
+        (unsigned char *)WIRE_VS, (unsigned char *)WIRE_FS,
+        (unsigned char *)LINE_VS, (unsigned char *)LINE_FS,
+        (unsigned char *)DEPTH_VS, (unsigned char *)DEPTH_FS,
+        (unsigned char *)CONSTANT_VS, (unsigned char *)CONSTANT_FS,
+        (unsigned char *)TEXT_VS, (unsigned char *)TEXT_FS);
 }
 
 int shim_gl_text_set_font(unsigned char *font_rows, int row_count,
@@ -1338,6 +1407,54 @@ void shim_gl_begin_flat(float *mvp, float *model,
     glUniform4f(g_flat_u_base_color, cr, cg, cb, ca);
 }
 
+void shim_gl_set_pbr_lights(float *light_data, int light_count) {
+    GLfloat pos_type[16] = {0};
+    GLfloat dir_data[16] = {0};
+    GLfloat light_color[16] = {0};
+    GLint cur_prog = 0;
+    int count = light_count;
+
+    glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+    if ((GLuint)cur_prog != g_pbr_prog) {
+        return;
+    }
+    if (!light_data) {
+        count = 0;
+    }
+    if (count < 0) count = 0;
+    if (count > 4) count = 4;
+
+    for (int i = 0; i < count; ++i) {
+        int src = i * 12;
+        int dst = i * 4;
+        pos_type[dst + 0] = light_data[src + 0];
+        pos_type[dst + 1] = light_data[src + 1];
+        pos_type[dst + 2] = light_data[src + 2];
+        pos_type[dst + 3] = light_data[src + 3];
+        dir_data[dst + 0] = light_data[src + 4];
+        dir_data[dst + 1] = light_data[src + 5];
+        dir_data[dst + 2] = light_data[src + 6];
+        dir_data[dst + 3] = light_data[src + 7];
+        light_color[dst + 0] = light_data[src + 8];
+        light_color[dst + 1] = light_data[src + 9];
+        light_color[dst + 2] = light_data[src + 10];
+        light_color[dst + 3] = light_data[src + 11];
+    }
+
+    if (g_pbr_u_light_count >= 0) {
+        glUniform1i(g_pbr_u_light_count, count);
+    }
+    if (g_pbr_u_light_pos_type >= 0) {
+        glUniform4fv(g_pbr_u_light_pos_type, 4, pos_type);
+    }
+    if (g_pbr_u_light_dir_data >= 0) {
+        glUniform4fv(g_pbr_u_light_dir_data, 4, dir_data);
+    }
+    if (g_pbr_u_light_color >= 0) {
+        glUniform4fv(g_pbr_u_light_color, 4, light_color);
+    }
+}
+
 void shim_gl_begin_pbr(float *mvp, float *model,
                        float ldx, float ldy, float ldz,
                        float lr, float lg, float lb,
@@ -1345,24 +1462,31 @@ void shim_gl_begin_pbr(float *mvp, float *model,
                        float ar, float ag, float ab,
                        float metallic, float roughness,
                        float *env, float alpha) {
+    (void)ldx;
+    (void)ldy;
+    (void)ldz;
+    (void)lr;
+    (void)lg;
+    (void)lb;
     glUseProgram(g_pbr_prog);
     shim_gl_upload_mvp(g_pbr_u_mvp, mvp);
     glUniformMatrix4fv(g_pbr_u_model, 1, GL_FALSE, model);
-    glUniform3f(g_pbr_u_light_dir, ldx, ldy, ldz);
-    glUniform3f(g_pbr_u_light_color, lr, lg, lb);
     glUniform3f(g_pbr_u_eye_pos, ex, ey, ez);
     glUniform3f(g_pbr_u_albedo, ar, ag, ab);
     glUniform1f(g_pbr_u_metallic, metallic);
     glUniform1f(g_pbr_u_roughness, roughness);
-    /* env: sky3 ground3 horizon3 spec3 intensity light2_dir3 */
+    /* env: sky3 ground3 horizon3 spec3 intensity diffuse_mix specular_mix */
     glUniform3f(g_pbr_u_env_sky,      env[0], env[1], env[2]);
     glUniform3f(g_pbr_u_env_ground,   env[3], env[4], env[5]);
     glUniform3f(g_pbr_u_env_horizon,  env[6], env[7], env[8]);
     glUniform3f(g_pbr_u_env_specular, env[9], env[10], env[11]);
     glUniform1f(g_pbr_u_env_intensity, env[12]);
-    glUniform3f(g_pbr_u_light2_dir, env[13], env[14], env[15]);
-    glUniform3f(g_pbr_u_light2_color, lr, lg, lb);
+    glUniform1f(g_pbr_u_env_diffuse_mix, env[13]);
+    glUniform1f(g_pbr_u_env_specular_mix, env[14]);
     glUniform1f(g_pbr_u_alpha, alpha);
+    if (g_pbr_u_light_count >= 0) {
+        glUniform1i(g_pbr_u_light_count, 0);
+    }
 }
 
 void shim_gl_begin_cell(float *mvp, float *model,
@@ -1383,28 +1507,152 @@ void shim_gl_begin_wire(float *mvp, float cr, float cg, float cb, float ca) {
     glUniform4f(g_wire_u_color, cr, cg, cb, ca);
 }
 
-void shim_gl_set_albedo_texture(unsigned int tex) {
+void shim_gl_begin_constant(float *mvp,
+                            float cr, float cg, float cb, float ca) {
+    glUseProgram(g_constant_prog);
+    shim_gl_upload_mvp(g_constant_u_mvp, mvp);
+    glUniform4f(g_constant_u_color, cr, cg, cb, ca);
+}
+
+void shim_gl_set_pbr_ibl_textures(unsigned int global_tex,
+                                  unsigned int global_blur_tex,
+                                  unsigned int local_tex,
+                                  unsigned int local_blur_tex) {
     GLint cur_prog = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
-    GLint u_use_texture, u_albedo_tex;
+    if ((GLuint)cur_prog != g_pbr_prog) {
+        return;
+    }
+
+    glActiveTexture(GL_TEXTURE3);
+    if (global_tex != 0) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)global_tex);
+        if (g_pbr_u_env_global_tex >= 0) glUniform1i(g_pbr_u_env_global_tex, 3);
+        if (g_pbr_u_use_env_global_texture >= 0) {
+            glUniform1i(g_pbr_u_use_env_global_texture, 1);
+        }
+    } else {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        if (g_pbr_u_use_env_global_texture >= 0) {
+            glUniform1i(g_pbr_u_use_env_global_texture, 0);
+        }
+    }
+
+    glActiveTexture(GL_TEXTURE4);
+    if (global_blur_tex != 0) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)global_blur_tex);
+        if (g_pbr_u_env_global_blur_tex >= 0) {
+            glUniform1i(g_pbr_u_env_global_blur_tex, 4);
+        }
+        if (g_pbr_u_use_env_global_blur_texture >= 0) {
+            glUniform1i(g_pbr_u_use_env_global_blur_texture, 1);
+        }
+    } else {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        if (g_pbr_u_use_env_global_blur_texture >= 0) {
+            glUniform1i(g_pbr_u_use_env_global_blur_texture, 0);
+        }
+    }
+
+    glActiveTexture(GL_TEXTURE5);
+    if (local_tex != 0) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)local_tex);
+        if (g_pbr_u_env_local_tex >= 0) glUniform1i(g_pbr_u_env_local_tex, 5);
+        if (g_pbr_u_use_env_local_texture >= 0) {
+            glUniform1i(g_pbr_u_use_env_local_texture, 1);
+        }
+    } else {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        if (g_pbr_u_use_env_local_texture >= 0) {
+            glUniform1i(g_pbr_u_use_env_local_texture, 0);
+        }
+    }
+
+    glActiveTexture(GL_TEXTURE6);
+    if (local_blur_tex != 0) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)local_blur_tex);
+        if (g_pbr_u_env_local_blur_tex >= 0) {
+            glUniform1i(g_pbr_u_env_local_blur_tex, 6);
+        }
+        if (g_pbr_u_use_env_local_blur_texture >= 0) {
+            glUniform1i(g_pbr_u_use_env_local_blur_texture, 1);
+        }
+    } else {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        if (g_pbr_u_use_env_local_blur_texture >= 0) {
+            glUniform1i(g_pbr_u_use_env_local_blur_texture, 0);
+        }
+    }
+
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void shim_gl_set_material_textures(unsigned int albedo_tex, unsigned int orm_tex,
+                                   unsigned int normal_tex) {
+    GLint cur_prog = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+    GLint u_use_texture = -1, u_albedo_tex = -1;
+    GLint u_use_orm_texture = -1, u_orm_tex = -1;
+    GLint u_use_normal_texture = -1, u_normal_tex = -1;
+    int is_pbr = 0;
     if ((GLuint)cur_prog == g_pbr_prog) {
         u_use_texture = g_pbr_u_use_texture;
         u_albedo_tex = g_pbr_u_albedo_tex;
+        u_use_orm_texture = g_pbr_u_use_orm_texture;
+        u_orm_tex = g_pbr_u_orm_tex;
+        u_use_normal_texture = g_pbr_u_use_normal_texture;
+        u_normal_tex = g_pbr_u_normal_tex;
+        is_pbr = 1;
     } else if ((GLuint)cur_prog == g_cell_prog) {
         u_use_texture = g_cell_u_use_texture;
         u_albedo_tex = g_cell_u_albedo_tex;
-    } else {
+    } else if ((GLuint)cur_prog == g_flat_prog) {
         u_use_texture = g_flat_u_use_texture;
         u_albedo_tex = g_flat_u_albedo_tex;
+    } else if ((GLuint)cur_prog == g_depth_prog) {
+        u_use_texture = g_depth_u_use_texture;
+        u_albedo_tex = g_depth_u_albedo_tex;
+    } else if ((GLuint)cur_prog == g_constant_prog) {
+        u_use_texture = g_constant_u_use_texture;
+        u_albedo_tex = g_constant_u_albedo_tex;
+    } else {
+        return;
     }
-    if (tex != 0) {
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)tex);
+    glActiveTexture(GL_TEXTURE0);
+    if (albedo_tex != 0) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)albedo_tex);
         if (u_albedo_tex >= 0) glUniform1i(u_albedo_tex, 0);
         if (u_use_texture >= 0) glUniform1i(u_use_texture, 1);
     } else {
+        glBindTexture(GL_TEXTURE_2D, 0);
         if (u_use_texture >= 0) glUniform1i(u_use_texture, 0);
     }
+
+    if (is_pbr) {
+        glActiveTexture(GL_TEXTURE1);
+        if (orm_tex != 0) {
+            glBindTexture(GL_TEXTURE_2D, (GLuint)orm_tex);
+            if (u_orm_tex >= 0) glUniform1i(u_orm_tex, 1);
+            if (u_use_orm_texture >= 0) glUniform1i(u_use_orm_texture, 1);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, 0);
+            if (u_use_orm_texture >= 0) glUniform1i(u_use_orm_texture, 0);
+        }
+        glActiveTexture(GL_TEXTURE2);
+        if (normal_tex != 0) {
+            glBindTexture(GL_TEXTURE_2D, (GLuint)normal_tex);
+            if (u_normal_tex >= 0) glUniform1i(u_normal_tex, 2);
+            if (u_use_normal_texture >= 0) glUniform1i(u_use_normal_texture, 1);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, 0);
+            if (u_use_normal_texture >= 0) glUniform1i(u_use_normal_texture, 0);
+        }
+        glActiveTexture(GL_TEXTURE0);
+    }
+}
+
+void shim_gl_set_albedo_texture(unsigned int tex) {
+    shim_gl_set_material_textures(tex, 0, 0);
 }
 
 void shim_gl_begin_line(float *mvp) {
@@ -1416,23 +1664,32 @@ void shim_gl_draw_mesh_handles(unsigned int vbo, unsigned int ibo,
                                int index_count) {
     GLint cur_prog = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
-    GLint a_pos, a_norm, a_uv;
+    GLint a_pos, a_norm, a_uv, a_tangent;
     if ((GLuint)cur_prog == g_depth_prog) {
         a_pos = g_depth_a_pos;
         a_norm = -1;
         a_uv = g_depth_a_uv;
+        a_tangent = -1;
+    } else if ((GLuint)cur_prog == g_constant_prog) {
+        a_pos = g_constant_a_pos;
+        a_norm = -1;
+        a_uv = g_constant_a_uv;
+        a_tangent = -1;
     } else if ((GLuint)cur_prog == g_pbr_prog) {
         a_pos = g_pbr_a_pos;
         a_norm = g_pbr_a_norm;
         a_uv = g_pbr_a_uv;
+        a_tangent = g_pbr_a_tangent;
     } else if ((GLuint)cur_prog == g_cell_prog) {
         a_pos = g_cell_a_pos;
         a_norm = g_cell_a_norm;
         a_uv = g_cell_a_uv;
+        a_tangent = -1;
     } else {
         a_pos = g_flat_a_pos;
         a_norm = g_flat_a_norm;
         a_uv = g_flat_a_uv;
+        a_tangent = -1;
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -1440,17 +1697,23 @@ void shim_gl_draw_mesh_handles(unsigned int vbo, unsigned int ibo,
 
     if (a_pos >= 0) {
         glEnableVertexAttribArray((GLuint)a_pos);
-        glVertexAttribPointer((GLuint)a_pos, 3, GL_FLOAT, GL_FALSE, 32, (void *)0);
+        glVertexAttribPointer((GLuint)a_pos, 3, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)SHIM_MESH_POS_OFFSET);
     }
     if (a_norm >= 0) {
         glEnableVertexAttribArray((GLuint)a_norm);
-        glVertexAttribPointer((GLuint)a_norm, 3, GL_FLOAT, GL_FALSE, 32,
-                              (void *)(intptr_t)12);
+        glVertexAttribPointer((GLuint)a_norm, 3, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)(intptr_t)SHIM_MESH_NORM_OFFSET);
     }
     if (a_uv >= 0) {
         glEnableVertexAttribArray((GLuint)a_uv);
-        glVertexAttribPointer((GLuint)a_uv, 2, GL_FLOAT, GL_FALSE, 32,
-                              (void *)(intptr_t)24);
+        glVertexAttribPointer((GLuint)a_uv, 2, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)(intptr_t)SHIM_MESH_UV_OFFSET);
+    }
+    if (a_tangent >= 0) {
+        glEnableVertexAttribArray((GLuint)a_tangent);
+        glVertexAttribPointer((GLuint)a_tangent, 4, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)(intptr_t)SHIM_MESH_TANGENT_OFFSET);
     }
 
     glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_SHORT, NULL);
@@ -1458,6 +1721,7 @@ void shim_gl_draw_mesh_handles(unsigned int vbo, unsigned int ibo,
     if (a_pos >= 0)  glDisableVertexAttribArray((GLuint)a_pos);
     if (a_norm >= 0) glDisableVertexAttribArray((GLuint)a_norm);
     if (a_uv >= 0)   glDisableVertexAttribArray((GLuint)a_uv);
+    if (a_tangent >= 0) glDisableVertexAttribArray((GLuint)a_tangent);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 }
@@ -1475,7 +1739,8 @@ void shim_gl_draw_mesh_wire_handles(unsigned int vbo, unsigned int wire_ibo,
 
     if (g_wire_a_pos >= 0) {
         glEnableVertexAttribArray((GLuint)g_wire_a_pos);
-        glVertexAttribPointer((GLuint)g_wire_a_pos, 3, GL_FLOAT, GL_FALSE, 32, (void *)0);
+        glVertexAttribPointer((GLuint)g_wire_a_pos, 3, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)SHIM_MESH_POS_OFFSET);
     }
 
     if (had_cull) glDisable(GL_CULL_FACE);
@@ -1527,19 +1792,27 @@ void shim_gl_draw_mesh(float *verts, int vert_floats,
     /* Determine which program is active to get correct attrib locs */
     GLint cur_prog = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
-    GLint a_pos, a_norm, a_uv;
+    GLint a_pos, a_norm, a_uv, a_tangent;
     if ((GLuint)cur_prog == g_depth_prog) {
         a_pos = g_depth_a_pos;
         a_norm = -1; /* depth shader has no normal attribute */
         a_uv = g_depth_a_uv;
+        a_tangent = -1;
+    } else if ((GLuint)cur_prog == g_constant_prog) {
+        a_pos = g_constant_a_pos;
+        a_norm = -1; /* constant color shader only needs positions + UVs for alpha mask */
+        a_uv = g_constant_a_uv;
+        a_tangent = -1;
     } else if ((GLuint)cur_prog == g_pbr_prog) {
         a_pos = g_pbr_a_pos;
         a_norm = g_pbr_a_norm;
         a_uv = g_pbr_a_uv;
+        a_tangent = g_pbr_a_tangent;
     } else {
         a_pos = g_flat_a_pos;
         a_norm = g_flat_a_norm;
         a_uv = g_flat_a_uv;
+        a_tangent = -1;
     }
 
     GLuint vbo, ibo;
@@ -1556,15 +1829,23 @@ void shim_gl_draw_mesh(float *verts, int vert_floats,
 
     if (a_pos >= 0) {
         glEnableVertexAttribArray((GLuint)a_pos);
-        glVertexAttribPointer((GLuint)a_pos, 3, GL_FLOAT, GL_FALSE, 32, (void *)0);
+        glVertexAttribPointer((GLuint)a_pos, 3, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)SHIM_MESH_POS_OFFSET);
     }
     if (a_norm >= 0) {
         glEnableVertexAttribArray((GLuint)a_norm);
-        glVertexAttribPointer((GLuint)a_norm, 3, GL_FLOAT, GL_FALSE, 32, (void *)(intptr_t)12);
+        glVertexAttribPointer((GLuint)a_norm, 3, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)(intptr_t)SHIM_MESH_NORM_OFFSET);
     }
     if (a_uv >= 0) {
         glEnableVertexAttribArray((GLuint)a_uv);
-        glVertexAttribPointer((GLuint)a_uv, 2, GL_FLOAT, GL_FALSE, 32, (void *)(intptr_t)24);
+        glVertexAttribPointer((GLuint)a_uv, 2, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)(intptr_t)SHIM_MESH_UV_OFFSET);
+    }
+    if (a_tangent >= 0) {
+        glEnableVertexAttribArray((GLuint)a_tangent);
+        glVertexAttribPointer((GLuint)a_tangent, 4, GL_FLOAT, GL_FALSE,
+                              SHIM_MESH_BYTE_STRIDE, (void *)(intptr_t)SHIM_MESH_TANGENT_OFFSET);
     }
 
     glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_SHORT, NULL);
@@ -1572,6 +1853,7 @@ void shim_gl_draw_mesh(float *verts, int vert_floats,
     if (a_pos >= 0)  glDisableVertexAttribArray((GLuint)a_pos);
     if (a_norm >= 0) glDisableVertexAttribArray((GLuint)a_norm);
     if (a_uv >= 0)   glDisableVertexAttribArray((GLuint)a_uv);
+    if (a_tangent >= 0) glDisableVertexAttribArray((GLuint)a_tangent);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glDeleteBuffers(1, &vbo);
@@ -1790,24 +2072,87 @@ static GLint g_blit_a_pos, g_blit_a_uv;
 static GLint g_blit_u_screen, g_blit_u_tex;
 static GLuint g_blit_vbo = 0;
 
-unsigned int shim_gl_create_texture_rgb(unsigned char *data, int w, int h) {
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
+static void shim_gl_set_texture_params(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+static unsigned char *shim_rgb_to_rgba(const unsigned char *data, int w, int h) {
+    size_t pixel_count = (size_t)w * (size_t)h;
+    unsigned char *rgba = (unsigned char *)malloc(pixel_count * 4);
+    if (!rgba) return NULL;
+    for (size_t i = 0; i < pixel_count; i++) {
+        rgba[i * 4 + 0] = data[i * 3 + 0];
+        rgba[i * 4 + 1] = data[i * 3 + 1];
+        rgba[i * 4 + 2] = data[i * 3 + 2];
+        rgba[i * 4 + 3] = 255;
+    }
+    return rgba;
+}
+
+static void shim_blur_equirect_rgb(const unsigned char *src, unsigned char *dst,
+                                   int w, int h) {
+    int rx = w / 16;
+    int ry = h / 16;
+    if (rx < 1) rx = 1;
+    if (ry < 1) ry = 1;
+    if (rx > 24) rx = 24;
+    if (ry > 12) ry = 12;
+
+    unsigned char *tmp = (unsigned char *)malloc((size_t)w * (size_t)h * 3);
+    if (!tmp) {
+        memcpy(dst, src, (size_t)w * (size_t)h * 3);
+        return;
+    }
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            for (int c = 0; c < 3; c++) {
+                int sum = 0;
+                int count = 0;
+                for (int dx = -rx; dx <= rx; dx++) {
+                    int xx = x + dx;
+                    while (xx < 0) xx += w;
+                    while (xx >= w) xx -= w;
+                    sum += src[(y * w + xx) * 3 + c];
+                    count++;
+                }
+                tmp[(y * w + x) * 3 + c] = (unsigned char)(sum / count);
+            }
+        }
+    }
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            for (int c = 0; c < 3; c++) {
+                int sum = 0;
+                int count = 0;
+                for (int dy = -ry; dy <= ry; dy++) {
+                    int yy = y + dy;
+                    if (yy < 0) yy = 0;
+                    if (yy >= h) yy = h - 1;
+                    sum += tmp[(yy * w + x) * 3 + c];
+                    count++;
+                }
+                dst[(y * w + x) * 3 + c] = (unsigned char)(sum / count);
+            }
+        }
+    }
+
+    free(tmp);
+}
+
+unsigned int shim_gl_create_texture_rgb(unsigned char *data, int w, int h) {
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    shim_gl_set_texture_params();
     /* GLES2: internal format must match format for glTexImage2D.
      * Use RGBA and convert from RGB to avoid driver issues. */
-    unsigned char *rgba = (unsigned char *)malloc((size_t)(w * h * 4));
+    unsigned char *rgba = shim_rgb_to_rgba(data, w, h);
     if (rgba) {
-        for (int i = 0; i < w * h; i++) {
-            rgba[i * 4 + 0] = data[i * 3 + 0];
-            rgba[i * 4 + 1] = data[i * 3 + 1];
-            rgba[i * 4 + 2] = data[i * 3 + 2];
-            rgba[i * 4 + 3] = 255;
-        }
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         free(rgba);
@@ -1816,20 +2161,56 @@ unsigned int shim_gl_create_texture_rgb(unsigned char *data, int w, int h) {
     return (unsigned int)tex;
 }
 
+unsigned int shim_gl_create_texture_rgb_blurred(unsigned char *data, int w, int h) {
+    size_t rgb_bytes = (size_t)w * (size_t)h * 3;
+    unsigned char *blurred = (unsigned char *)malloc(rgb_bytes);
+    if (!blurred) {
+        return shim_gl_create_texture_rgb(data, w, h);
+    }
+    shim_blur_equirect_rgb(data, blurred, w, h);
+    unsigned int tex = shim_gl_create_texture_rgb(blurred, w, h);
+    free(blurred);
+    return tex;
+}
+
+unsigned int shim_gl_create_texture_rgba(unsigned char *data, int w, int h) {
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    shim_gl_set_texture_params();
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return (unsigned int)tex;
+}
+
 void shim_gl_update_texture_rgb(unsigned int tex, unsigned char *data, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, tex);
-    unsigned char *rgba = (unsigned char *)malloc((size_t)(w * h * 4));
+    unsigned char *rgba = shim_rgb_to_rgba(data, w, h);
     if (rgba) {
-        for (int i = 0; i < w * h; i++) {
-            rgba[i * 4 + 0] = data[i * 3 + 0];
-            rgba[i * 4 + 1] = data[i * 3 + 1];
-            rgba[i * 4 + 2] = data[i * 3 + 2];
-            rgba[i * 4 + 3] = 255;
-        }
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
                         GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         free(rgba);
     }
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void shim_gl_update_texture_rgb_blurred(unsigned int tex, unsigned char *data, int w, int h) {
+    size_t rgb_bytes = (size_t)w * (size_t)h * 3;
+    unsigned char *blurred = (unsigned char *)malloc(rgb_bytes);
+    if (!blurred) {
+        shim_gl_update_texture_rgb(tex, data, w, h);
+        return;
+    }
+    shim_blur_equirect_rgb(data, blurred, w, h);
+    shim_gl_update_texture_rgb(tex, blurred, w, h);
+    free(blurred);
+}
+
+void shim_gl_update_texture_rgba(unsigned int tex, unsigned char *data, int w, int h) {
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                    GL_RGBA, GL_UNSIGNED_BYTE, data);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
@@ -1850,6 +2231,11 @@ int shim_gl_init_blit_shader(unsigned char *blit_vs, unsigned char *blit_fs) {
     g_blit_u_tex   = glGetUniformLocation(g_blit_prog, "u_tex");
     if (!g_blit_vbo) glGenBuffers(1, &g_blit_vbo);
     return 0;
+}
+
+int shim_gl_init_embedded_blit_shader(void) {
+    return shim_gl_init_blit_shader(
+        (unsigned char *)BLIT_VS, (unsigned char *)BLIT_FS);
 }
 
 /* Draw a textured quad at screen position (x,y) with size (w,h) in pixels.
@@ -1926,8 +2312,8 @@ int shim_write_ppm(unsigned char *filename, unsigned char *pixels, int w, int h)
 /* ================================================================
  * Binary STL loader with vertex welding and smooth normals
  * Reads binary STL, merges duplicate vertices, accumulates normals.
- * Writes interleaved [px,py,pz,nx,ny,nz,u,v] per vertex (stride 8).
- * UVs are set to (0,0) since STL has no UV data.
+ * Writes interleaved [px,py,pz,nx,ny,nz,u,v,tx,ty,tz,tw] per vertex.
+ * UVs are set to (0,0) since STL has no UV data, and tangents default to +X.
  * Optional normalization maps mesh into [-0.5, 0.5] centered at origin.
  * ================================================================ */
 
@@ -1978,7 +2364,7 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
         if (decimate) {
             for (int v = 0; v < 3; v++) {
                 if (vc >= max_verts || ic >= max_indices) break;
-                int b = vc * 8;
+                int b = vc * SHIM_MESH_FLOAT_STRIDE;
                 verts[b + 0] = positions[v * 3 + 0];
                 verts[b + 1] = positions[v * 3 + 1];
                 verts[b + 2] = positions[v * 3 + 2];
@@ -1987,6 +2373,10 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
                 verts[b + 5] = face_normal[2];
                 verts[b + 6] = 0.0f;
                 verts[b + 7] = 0.0f;
+                verts[b + 8] = 1.0f;
+                verts[b + 9] = 0.0f;
+                verts[b + 10] = 0.0f;
+                verts[b + 11] = 1.0f;
                 indices[ic++] = (uint16_t)vc;
                 vc++;
             }
@@ -2002,7 +2392,7 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
             /* Search for existing vertex with same position */
             int found = -1;
             for (int e = 0; e < vc; e++) {
-                int base = e * 8;
+                int base = e * SHIM_MESH_FLOAT_STRIDE;
                 float dx = verts[base + 0] - px;
                 float dy = verts[base + 1] - py;
                 float dz = verts[base + 2] - pz;
@@ -2014,7 +2404,7 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
 
             if (found >= 0) {
                 /* Accumulate face normal to existing vertex */
-                int base = found * 8;
+                int base = found * SHIM_MESH_FLOAT_STRIDE;
                 verts[base + 3] += face_normal[0];
                 verts[base + 4] += face_normal[1];
                 verts[base + 5] += face_normal[2];
@@ -2023,7 +2413,7 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
                 }
             } else if (vc < max_verts) {
                 /* New vertex */
-                int base = vc * 8;
+                int base = vc * SHIM_MESH_FLOAT_STRIDE;
                 verts[base + 0] = px;
                 verts[base + 1] = py;
                 verts[base + 2] = pz;
@@ -2032,6 +2422,10 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
                 verts[base + 5] = face_normal[2];
                 verts[base + 6] = 0.0f;
                 verts[base + 7] = 0.0f;
+                verts[base + 8] = 1.0f;
+                verts[base + 9] = 0.0f;
+                verts[base + 10] = 0.0f;
+                verts[base + 11] = 1.0f;
                 if (ic < max_indices) {
                     indices[ic++] = (uint16_t)vc;
                 }
@@ -2045,7 +2439,7 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
     float min_x = 1e30f, min_y = 1e30f, min_z = 1e30f;
     float max_x = -1e30f, max_y = -1e30f, max_z = -1e30f;
     for (int i = 0; i < vc; i++) {
-        int base = i * 8;
+        int base = i * SHIM_MESH_FLOAT_STRIDE;
         if (verts[base] < min_x) min_x = verts[base];
         if (verts[base + 1] < min_y) min_y = verts[base + 1];
         if (verts[base + 2] < min_z) min_z = verts[base + 2];
@@ -2069,7 +2463,7 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
         float inv_scale = 1.0f / scale;
 
         for (int i = 0; i < vc; i++) {
-            int base = i * 8;
+            int base = i * SHIM_MESH_FLOAT_STRIDE;
             verts[base + 0] = (verts[base + 0] - cx) * inv_scale;
             verts[base + 1] = (verts[base + 1] - cy) * inv_scale;
             verts[base + 2] = (verts[base + 2] - cz) * inv_scale;
@@ -2078,7 +2472,7 @@ static int shim_load_stl_impl(unsigned char *filename, float *verts, uint16_t *i
 
     /* Normalize all vertex normals */
     for (int i = 0; i < vc; i++) {
-        int base = i * 8;
+        int base = i * SHIM_MESH_FLOAT_STRIDE;
         float nx = verts[base + 3];
         float ny = verts[base + 4];
         float nz = verts[base + 5];

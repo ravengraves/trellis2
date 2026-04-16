@@ -16,6 +16,9 @@ SHADERS = [
     ("Wire Shader (solid-color indexed edges)", [("wire.vert", "WIRE_VS"), ("wire.frag", "WIRE_FS")]),
     ("Line Shader (pass-through vertex color)", [("line.vert", "LINE_VS"), ("line.frag", "LINE_FS")]),
     ("Depth Shader (encode linear depth into RGBA8)", [("depth.vert", "DEPTH_VS"), ("depth.frag", "DEPTH_FS")]),
+    ("Constant Color Shader (uniform object/pass color)", [("constant.vert", "CONSTANT_VS"), ("constant.frag", "CONSTANT_FS")]),
+    ("Text Shader (font atlas overlays)", [("text.vert", "TEXT_VS"), ("text.frag", "TEXT_FS")]),
+    ("Blit Shader (2D texture overlays)", [("blit.vert", "BLIT_VS"), ("blit.frag", "BLIT_FS")]),
 ]
 
 def glsl_to_c_string(text):

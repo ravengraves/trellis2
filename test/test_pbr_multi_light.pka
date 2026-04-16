@@ -1,0 +1,152 @@
+// test_pbr_multi_light.pka — Verify the PBR path accumulates up to four direct lights.
+
+use fb;
+
+type AvgRgb = struct {
+	r: f32,
+	g: f32,
+	b: f32,
+};
+
+fn region_avg_rgb(pixels: []u8, w: i32,
+	x0: i32, y0: i32, x1: i32, y1: i32) AvgRgb = {
+	let sum_r: i32 = 0;
+	let sum_g: i32 = 0;
+	let sum_b: i32 = 0;
+	let count: i32 = 0;
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			let idx: size = ((py * w + px) * 3): size;
+			sum_r = sum_r + (pixels[idx]: i32);
+			sum_g = sum_g + (pixels[idx + 1z]: i32);
+			sum_b = sum_b + (pixels[idx + 2z]: i32);
+			count = count + 1;
+		};
+	};
+	let denom = count: f32;
+	return AvgRgb {
+		r = (sum_r: f32) / denom,
+		g = (sum_g: f32) / denom,
+		b = (sum_b: f32) / denom,
+	};
+};
+
+fn render_plane(draws: []E2GeomDraw,
+	cam: *FreeCamera, lights: []Light, env: *IrradianceEnv,
+	out_rgb: []u8, w: i32, h: i32) void = {
+	let empty = util_color_pass_init();
+	let no_depth: [1]f32 = [0.0];
+	let ok = e2_render_camera_to_buffers(cam, E2_GEOM_MODE_PBR,
+		draws,
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		lights,
+		env,
+		out_rgb,
+		no_depth[0z..0z],
+		w, h);
+	assert(ok, "pbr multi-light render ok");
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_pbr_multi_light ===");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 128, 96);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	let plane = mesh_create_plane();
+	let gpu_plane = util_mesh_upload(&plane);
+	assert(gpu_plane.valid, "gpu plane valid");
+
+	let geom_pass = util_geom_pass_init();
+	let scale = mat4_scale(2.4, 2.4, 2.4);
+	let rotate = mat4_rotate_x(90.0);
+	let model = mat4_mul(&rotate, &scale);
+	util_geom_pass_add(&geom_pass, &gpu_plane, model, material_pbr(color_white(), 0.0, 1.0));
+	assert(geom_pass.count == 1, "one draw");
+
+	let cam = freecam_new(
+		vec3_new(0.0, -1.5, 2.1),
+		vec3_new(0.0, 0.0, 0.0),
+		42.0, 0.1, 20.0);
+
+	let lights = util_light_buffer_init();
+	util_light_buffer_clear(&lights);
+	util_light_buffer_add(&lights,
+		light_directional(vec3_new(0.8, 0.0, 0.6), color_new(0.35, 0.0, 0.0, 1.0)));
+	util_light_buffer_add(&lights,
+		light_directional(vec3_new(0.8, 0.0, 0.6), color_new(0.0, 0.0, 0.35, 1.0)));
+	util_light_buffer_add(&lights,
+		light_directional(vec3_new(0.8, 0.0, 0.6), color_new(0.0, 0.15, 0.0, 1.0)));
+	util_light_buffer_add(&lights,
+		light_directional(vec3_new(0.8, 0.0, 0.6), color_new(0.0, 0.55, 0.0, 1.0)));
+
+	let env = IrradianceEnv {
+		sky_color = color_black(),
+		ground_color = color_black(),
+		horizon_color = color_black(),
+		specular_color = color_black(),
+		intensity = 0.0
+	};
+
+	let out_rgb: [36864]u8 = [0...];
+	let all_lights = util_light_buffer_slice(&lights);
+	render_plane(
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		&cam,
+		all_lights[0z..0z],
+		&env,
+		out_rgb[0z..],
+		128, 96);
+	let zero = region_avg_rgb(out_rgb[0z..], 128, 32, 24, 96, 72);
+	render_plane(
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		&cam,
+		all_lights[0z..3z],
+		&env,
+		out_rgb[0z..],
+		128, 96);
+	let three = region_avg_rgb(out_rgb[0z..], 128, 32, 24, 96, 72);
+
+	render_plane(
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		&cam,
+		all_lights[0z..4z],
+		&env,
+		out_rgb[0z..],
+		128, 96);
+	let four = region_avg_rgb(out_rgb[0z..], 128, 32, 24, 96, 72);
+
+	let tbuf: [256]u8 = [0...];
+	let tf = fb::New(tbuf[0z..256z]);
+	fb::Write(&tf, "  zero rgb=(");
+	fb::Wf64(&tf, zero.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, zero.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, zero.b: f64, 1, "dec");
+	fb::Write(&tf, ") three rgb=(");
+	fb::Wf64(&tf, three.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, three.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, three.b: f64, 1, "dec");
+	fb::Write(&tf, ") four rgb=(");
+	fb::Wf64(&tf, four.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, four.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, four.b: f64, 1, "dec");
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
+
+	assert(zero.r < 1.0 && zero.g < 1.0 && zero.b < 1.0,
+		"zero lights means no direct-light contribution");
+	assert(four.g > three.g + 20.0, "fourth light adds visible green energy");
+	assert(four.g > four.r + 15.0, "green dominates once fourth light is included");
+	assert(four.g > four.b + 15.0, "green also exceeds blue in four-light render");
+
+	e2_gpu_mesh_destroy(&gpu_plane);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_pbr_multi_light passed ===");
+};

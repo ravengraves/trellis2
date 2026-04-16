@@ -6,6 +6,7 @@ uniform vec3 u_light_color;
 uniform vec4 u_base_color;
 uniform sampler2D u_albedo_tex;
 uniform int u_use_texture;
+const float ALPHA_CUTOFF = 0.5;
 
 float luma(vec3 c) {
   return dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -26,13 +27,19 @@ float quantize(float v) {
 
 void main() {
   vec3 base = u_base_color.rgb;
+  float alpha = 1.0;
   if (u_use_texture != 0) {
-    base = texture2D(u_albedo_tex, v_uv).rgb;
+    vec4 texel = texture2D(u_albedo_tex, v_uv);
+    base = texel.rgb;
+    alpha = texel.a;
+    if (alpha < ALPHA_CUTOFF) {
+      discard;
+    }
   }
   vec3 n = normalize(v_normal);
   float ndotl = abs(dot(n, normalize(u_light_dir)));
   vec3 radiance = u_light_color * ndotl;
   float intensity = clamp(0.15 + luma(radiance), 0.0, 1.0);
   float shade = quantize(intensity);
-  gl_FragColor = vec4(base * shade, u_base_color.a);
+  gl_FragColor = vec4(base * shade, u_base_color.a * alpha);
 }

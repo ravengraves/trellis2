@@ -1,0 +1,184 @@
+// test_pbr_normal_map.pka — Verify tangent-space normal textures perturb PBR lighting.
+
+use fb;
+
+type AvgRgb = struct {
+	r: f32,
+	g: f32,
+	b: f32,
+};
+
+fn fill_split_texture(data: []u8, w: i32, h: i32,
+	left_r: u8, left_g: u8, left_b: u8,
+	right_r: u8, right_g: u8, right_b: u8) void = {
+	for (let py: i32 = 0; py < h; py += 1) {
+		for (let px: i32 = 0; px < w; px += 1) {
+			let idx: size = ((py * w + px) * 3): size;
+			if (px < (w / 2)) {
+				data[idx] = left_r;
+				data[idx + 1z] = left_g;
+				data[idx + 2z] = left_b;
+			} else {
+				data[idx] = right_r;
+				data[idx + 1z] = right_g;
+				data[idx + 2z] = right_b;
+			};
+		};
+	};
+};
+
+fn region_avg_rgb(pixels: []u8, w: i32,
+	x0: i32, y0: i32, x1: i32, y1: i32) AvgRgb = {
+	let sum_r: i32 = 0;
+	let sum_g: i32 = 0;
+	let sum_b: i32 = 0;
+	let count: i32 = 0;
+	for (let py: i32 = y0; py < y1; py += 1) {
+		for (let px: i32 = x0; px < x1; px += 1) {
+			let idx: size = ((py * w + px) * 3): size;
+			sum_r = sum_r + (pixels[idx]: i32);
+			sum_g = sum_g + (pixels[idx + 1z]: i32);
+			sum_b = sum_b + (pixels[idx + 2z]: i32);
+			count = count + 1;
+		};
+	};
+	let denom = count: f32;
+	return AvgRgb {
+		r = (sum_r: f32) / denom,
+		g = (sum_g: f32) / denom,
+		b = (sum_b: f32) / denom,
+	};
+};
+
+fn region_luma(avg: AvgRgb) f32 = {
+	return (avg.r + avg.g + avg.b) / 3.0;
+};
+
+fn render_plane(draws: []E2GeomDraw,
+	cam: *FreeCamera, lights: []Light, env: *IrradianceEnv,
+	out_rgb: []u8, w: i32, h: i32) void = {
+	let empty = util_color_pass_init();
+	let no_depth: [1]f32 = [0.0];
+	let ok = e2_render_camera_to_buffers(cam, E2_GEOM_MODE_PBR,
+		draws,
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		lights,
+		env,
+		out_rgb,
+		no_depth[0z..0z],
+		w, h);
+	assert(ok, "pbr normal-map render ok");
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_pbr_normal_map ===");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 128, 96);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	let plane = mesh_create_plane();
+	let gpu_plane = util_mesh_upload(&plane);
+	assert(gpu_plane.valid, "gpu plane valid");
+
+	let geom_pass = util_geom_pass_init();
+	let scale = mat4_scale(2.4, 2.4, 2.4);
+	let rotate = mat4_rotate_x(90.0);
+	let model = mat4_mul(&rotate, &scale);
+	util_geom_pass_add(&geom_pass, &gpu_plane, model, material_pbr(color_white(), 0.0, 1.0));
+	assert(geom_pass.count == 1, "one draw");
+
+	let cam = freecam_new(
+		vec3_new(0.0, -1.5, 2.1),
+		vec3_new(0.0, 0.0, 0.0),
+		42.0, 0.1, 20.0);
+
+	let lights = util_light_buffer_init();
+	util_light_buffer_clear(&lights);
+	util_light_buffer_add(&lights,
+		light_directional(vec3_new(0.8, 0.0, 0.6), color_white()));
+
+	let env = IrradianceEnv {
+		sky_color = color_black(),
+		ground_color = color_black(),
+		horizon_color = color_black(),
+		specular_color = color_black(),
+		intensity = 0.0
+	};
+
+	let out_rgb: [36864]u8 = [0...];
+	let tbuf: [256]u8 = [0...];
+	let tf = fb::New(tbuf[0z..256z]);
+
+	let base_mat = material_pbr(color_white(), 0.0, 1.0);
+	geom_pass.draws[0z].material = base_mat;
+	render_plane(
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		&cam,
+		util_light_buffer_slice(&lights),
+		&env,
+		out_rgb[0z..],
+		128, 96);
+
+	let base_left = region_avg_rgb(out_rgb[0z..], 128, 20, 24, 52, 72);
+	let base_right = region_avg_rgb(out_rgb[0z..], 128, 76, 24, 108, 72);
+	let base_left_luma = region_luma(base_left);
+	let base_right_luma = region_luma(base_right);
+	let base_delta = base_left_luma - base_right_luma;
+	if (base_delta < 0.0) { base_delta = 0.0 - base_delta; };
+	let base_avg = (base_left_luma + base_right_luma) * 0.5;
+
+	fb::Write(&tf, "  baseline left=");
+	fb::Wf64(&tf, base_left_luma: f64, 2, "dec");
+	fb::Write(&tf, " right=");
+	fb::Wf64(&tf, base_right_luma: f64, 2, "dec");
+	fb::Println(&tf);
+
+	assert(base_delta < 8.0, "baseline plane stays visually even");
+
+	fb::Clear(&tf);
+	let normal_texels: [192]u8 = [0...];
+	// Left tangent-space normal points away from the light, right points toward it.
+	fill_split_texture(normal_texels[0z..], 8, 8,
+		26u8, 128u8, 204u8,
+		230u8, 128u8, 204u8);
+	let normal_tex = e2_gpu_texture_create_rgb(normal_texels[0z..], 8, 8);
+	assert(normal_tex.valid, "normal texture valid");
+
+	let nm_mat = material_pbr(color_white(), 0.0, 1.0);
+	nm_mat.normal_texture = normal_tex.handle;
+	geom_pass.draws[0z].material = nm_mat;
+	render_plane(
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		&cam,
+		util_light_buffer_slice(&lights),
+		&env,
+		out_rgb[0z..],
+		128, 96);
+
+	let nm_left = region_avg_rgb(out_rgb[0z..], 128, 20, 24, 52, 72);
+	let nm_right = region_avg_rgb(out_rgb[0z..], 128, 76, 24, 108, 72);
+	let nm_left_luma = region_luma(nm_left);
+	let nm_right_luma = region_luma(nm_right);
+	let bright_luma = nm_left_luma;
+	let dark_luma = nm_right_luma;
+	if (nm_right_luma > nm_left_luma) {
+		bright_luma = nm_right_luma;
+		dark_luma = nm_left_luma;
+	};
+
+	fb::Write(&tf, "  normal-map left=");
+	fb::Wf64(&tf, nm_left_luma: f64, 2, "dec");
+	fb::Write(&tf, " right=");
+	fb::Wf64(&tf, nm_right_luma: f64, 2, "dec");
+	fb::Println(&tf);
+
+	assert(bright_luma > dark_luma + 20.0, "normal map creates directional light split");
+	assert(bright_luma > base_avg + 8.0, "lit side brightens above baseline");
+	assert(dark_luma < base_avg - 20.0, "shadowed side darkens below baseline");
+
+	e2_gpu_texture_destroy(&normal_tex);
+	e2_gpu_mesh_destroy(&gpu_plane);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_pbr_normal_map passed ===");
+};

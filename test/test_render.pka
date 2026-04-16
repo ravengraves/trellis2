@@ -16,6 +16,26 @@ fn count_nonblack_rgb(pixels: []u8) i32 = {
 	return n;
 };
 
+fn count_rgb_range(pixels: []u8,
+	r_min: u8, r_max: u8,
+	g_min: u8, g_max: u8,
+	b_min: u8, b_max: u8) i32 = {
+	let n: i32 = 0;
+	let i: size = 0z;
+	for (i + 2z < pixels.len) {
+		let r = pixels[i];
+		let g = pixels[i + 1z];
+		let b = pixels[i + 2z];
+		if (r >= r_min && r <= r_max &&
+			g >= g_min && g <= g_max &&
+			b >= b_min && b <= b_max) {
+			n = n + 1;
+		};
+		i = i + 3z;
+	};
+	return n;
+};
+
 export fn main() void = {
 	fmt::Printsln("=== test_render ===");
 
@@ -106,6 +126,43 @@ export fn main() void = {
 	fmt::Write(&tf, ", blue pixels: ");
 	fmt::Wi64(&tf, blue_pixels: i64);
 	fmt::Println(&tf);
+
+	assert(geom_pass.count >= 3, "scene has expected test geoms");
+	geom_pass.draws[0z].material = material_flat(color_yellow());
+	geom_pass.draws[1z].material = material_flat(color_green());
+	geom_pass.draws[2z].material = material_flat(color_blue());
+
+	e2_pass_begin(&rt, color_black());
+	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_CONSTANT_COLOR,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		util_light_buffer_slice(&lights), &env);
+	e2_pass_end(&rt);
+
+	let yellow_pixels = count_rgb_range(rt.fb.pixels[0z..nbytes],
+		240u8, 255u8,
+		240u8, 255u8,
+		0u8, 15u8);
+	let green_pixels = count_rgb_range(rt.fb.pixels[0z..nbytes],
+		0u8, 15u8,
+		240u8, 255u8,
+		0u8, 15u8);
+	let blue_const_pixels = count_rgb_range(rt.fb.pixels[0z..nbytes],
+		0u8, 15u8,
+		0u8, 15u8,
+		240u8, 255u8);
+
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  constant pass yellow: ");
+	fmt::Wi64(&tf, yellow_pixels: i64);
+	fmt::Write(&tf, ", green: ");
+	fmt::Wi64(&tf, green_pixels: i64);
+	fmt::Write(&tf, ", blue: ");
+	fmt::Wi64(&tf, blue_const_pixels: i64);
+	fmt::Println(&tf);
+
+	assert(yellow_pixels > 500, "constant pass renders exact yellow plane");
+	assert(green_pixels > 20, "constant pass renders exact green sphere");
+	assert(blue_const_pixels > 20, "constant pass renders exact blue box");
 
 	// Cleanup
 	scene_destroy(&sc);

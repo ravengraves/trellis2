@@ -15,7 +15,8 @@ export type DepthSensor = struct {
 	height: i32,
 };
 
-// Create a depth sensor with given camera parameters and resolution.
+// Legacy FOV-based constructor. Prefer `depth_sensor_new_intrinsics(...)`
+// when the caller has explicit pinhole intrinsics.
 export fn depth_sensor_new(eye: Vec3, target: Vec3,
 	fov: f32, znear: f32, zfar: f32, w: i32, h: i32) DepthSensor = {
 	let cw = w;
@@ -26,6 +27,25 @@ export fn depth_sensor_new(eye: Vec3, target: Vec3,
 	if (ch <= 0) { ch = 48; };
 	return DepthSensor {
 		cam = freecam_new(eye, target, fov, znear, zfar),
+		depth = [0.0...],
+		rgb = [0...],
+		width = cw,
+		height = ch,
+	};
+};
+
+// Create a depth sensor with explicit ideal pinhole intrinsics in pixels.
+export fn depth_sensor_new_intrinsics(eye: Vec3, target: Vec3,
+	fx: f32, fy: f32, cx: f32, cy: f32,
+	znear: f32, zfar: f32, w: i32, h: i32) DepthSensor = {
+	let cw = w;
+	let ch = h;
+	if (cw > DSENS_MAX_W) { cw = DSENS_MAX_W; };
+	if (ch > DSENS_MAX_H) { ch = DSENS_MAX_H; };
+	if (cw <= 0) { cw = 64; };
+	if (ch <= 0) { ch = 48; };
+	return DepthSensor {
+		cam = freecam_new_intrinsics(eye, target, fx, fy, cx, cy, znear, zfar),
 		depth = [0.0...],
 		rgb = [0...],
 		width = cw,
