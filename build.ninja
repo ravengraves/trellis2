@@ -2,15 +2,15 @@ platform = libc
 builddir = build
 
 # MuJoCo paths (vendored via trellis)
-mujoco_dir = ../trellis/vendor/mujoco
+mujoco_dir = ../../simulator/trellis/vendor/mujoco
 mujoco_inc = -I$mujoco_dir/include
 mujoco_lib = $mujoco_dir/build/lib/libmujoco.a
 mujoco_extra = $mujoco_dir/build/lib/libtinyxml2.a $mujoco_dir/build/lib/liblodepng.a $mujoco_dir/build/lib/libqhullstatic_r.a $mujoco_dir/build/lib/libqhullcpp.a $mujoco_dir/build/lib/libccd.a $mujoco_dir/build/lib/libtinyobjloader.a
 
 # Libraries
 gl_libs = -lrt -lglfw -lGLESv2 -lEGL -lm -lpthread -ldl -lstdc++
-rose_inc = -I../rose/ros3/include -I../rose/mirage/include -I../rose/quicksand/include
-rose_libs = ../rose/ros3/build/ros3_so.o ../rose/mirage/build/libmirage.a ../rose/quicksand/build/libquicksand.a
+rose_inc = -I../../rose/ros3/include -I../../rose/mirage/include -I../../rose/quicksand/include
+rose_libs = ../../rose/ros3/build/ros3_so.o ../../rose/mirage/build/libmirage.a ../../rose/quicksand/build/libquicksand.a
 
 # Pollyn Engine sources vendored into trellis2/
 src_math3d = pollyn_engine/src/math3d.pka
@@ -36,84 +36,95 @@ pka_srcs_engine = $src_math3d $src_color $src_mesh $src_material $src_camera $sr
 # GL + MuJoCo shims
 gl_shim = pollyn_engine/shim/pollyn_shim.c
 mj_shim = shim/mujoco_shim.c
+robot_shim = shim/mujoco_robot_shim.c
 
 # Trellis2 Pika sources (paths relative to trellis2/ for ninja deps)
 src_mujoco = src/mujoco.pka
 src_scene = src/scene.pka
 src_depth_sensor = src/depth_sensor.pka
 src_camera_view = src/camera_view.pka
+src_robot_sim = src/robot_sim.pka
+src_robot_main = src/robot_main.pka
 src_main = src/main.pka
 src_roseviz_app = cmd/roseviz/roseviz_app.pka
 src_roseviz_main = cmd/roseviz/roseviz_main.pka
 src_roseviz_bridge = cmd/roseviz/roseviz_bridge.c
 src_roseviz_falling_ball = cmd/roseviz/roseviz_falling_ball.c
+src_image_view_main = cmd/image_view/image_view_main.pka
+src_image_view_bridge = cmd/image_view/image_view_bridge.c
 
 # Same paths relative to compiler/ for pikacc command
-t2_math3d = ../trellis2/pollyn_engine/src/math3d.pka
-t2_color = ../trellis2/pollyn_engine/src/color.pka
-t2_mesh = ../trellis2/pollyn_engine/src/mesh.pka
-t2_material = ../trellis2/pollyn_engine/src/material.pka
-t2_camera = ../trellis2/pollyn_engine/src/camera.pka
-t2_input = ../trellis2/pollyn_engine/src/input.pka
-t2_terminal = ../trellis2/pollyn_engine/src/terminal.pka
-t2_text = ../trellis2/pollyn_engine/src/text.pka
-t2_overlay2d = ../trellis2/pollyn_engine/src/overlay2d.pka
-t2_cv = ../trellis2/pollyn_engine/src/cv.pka
-t2_renderer = ../trellis2/pollyn_engine/src/renderer.pka
-t2_engine_core = ../trellis2/pollyn_engine/engine/core_engine.pka
-t2_engine_util_buffers = ../trellis2/pollyn_engine/engine/util_buffers.pka
-t2_engine_util_mesh = ../trellis2/pollyn_engine/engine/util_mesh.pka
-t2_engine_util_camera = ../trellis2/pollyn_engine/engine/util_camera.pka
-t2_engine_util_text = ../trellis2/pollyn_engine/engine/util_text.pka
-t2_engine_util_lights = ../trellis2/pollyn_engine/engine/util_lights.pka
-t2_mujoco = ../trellis2/src/mujoco.pka
-t2_scene = ../trellis2/src/scene.pka
-t2_depth_sensor = ../trellis2/src/depth_sensor.pka
-t2_camera_view = ../trellis2/src/camera_view.pka
-t2_main = ../trellis2/src/main.pka
-t2_roseviz_app = ../trellis2/cmd/roseviz/roseviz_app.pka
-t2_roseviz_main = ../trellis2/cmd/roseviz/roseviz_main.pka
-t2_roseviz_bridge = ../trellis2/cmd/roseviz/roseviz_bridge.c
-t2_roseviz_falling_ball = ../trellis2/cmd/roseviz/roseviz_falling_ball.c
-t2_test_physics = ../trellis2/test/test_physics.pka
-t2_test_camera_intrinsics = ../trellis2/test/test_camera_intrinsics.pka
-t2_test_object_draw_colors = ../trellis2/test/test_object_draw_colors.pka
-t2_test_alpha_mask = ../trellis2/test/test_alpha_mask.pka
-t2_test_pbr_ibl = ../trellis2/test/test_pbr_ibl.pka
-t2_test_pbr_multi_light = ../trellis2/test/test_pbr_multi_light.pka
-t2_test_pbr_normal_map = ../trellis2/test/test_pbr_normal_map.pka
-t2_test_pbr_orm = ../trellis2/test/test_pbr_orm.pka
-t2_test_pbr_terminal_room = ../trellis2/test/test_pbr_terminal_room.pka
-t2_test_render = ../trellis2/test/test_render.pka
-t2_test_cv = ../trellis2/test/test_cv.pka
-t2_test_depth = ../trellis2/test/test_depth.pka
-t2_test_texture2d = ../trellis2/test/test_texture2d.pka
-t2_test_roseviz_ui = ../trellis2/test/test_roseviz_ui.pka
-t2_test_roseviz_bridge = ../trellis2/test/test_roseviz_bridge.pka
-t2_test_roseviz_palette = ../trellis2/test/test_roseviz_palette.pka
-t2_test_roseviz_sidebar = ../trellis2/test/test_roseviz_sidebar.pka
-t2_test_roseviz_decode = ../trellis2/test/test_roseviz_decode.pka
-t2_test_roseviz_layout = ../trellis2/test/test_roseviz_layout.pka
-t2_test_roseviz_tf = ../trellis2/test/test_roseviz_tf.pka
-t2_test_roseviz_sim = ../trellis2/test/test_roseviz_sim.pka
-t2_gl_shim = ../trellis2/pollyn_engine/shim/pollyn_shim.c
-t2_mj_shim = ../trellis2/shim/mujoco_shim.c
+t2_math3d = ../../simulator/trellis2/pollyn_engine/src/math3d.pka
+t2_color = ../../simulator/trellis2/pollyn_engine/src/color.pka
+t2_mesh = ../../simulator/trellis2/pollyn_engine/src/mesh.pka
+t2_material = ../../simulator/trellis2/pollyn_engine/src/material.pka
+t2_camera = ../../simulator/trellis2/pollyn_engine/src/camera.pka
+t2_input = ../../simulator/trellis2/pollyn_engine/src/input.pka
+t2_terminal = ../../simulator/trellis2/pollyn_engine/src/terminal.pka
+t2_text = ../../simulator/trellis2/pollyn_engine/src/text.pka
+t2_overlay2d = ../../simulator/trellis2/pollyn_engine/src/overlay2d.pka
+t2_cv = ../../simulator/trellis2/pollyn_engine/src/cv.pka
+t2_renderer = ../../simulator/trellis2/pollyn_engine/src/renderer.pka
+t2_engine_core = ../../simulator/trellis2/pollyn_engine/engine/core_engine.pka
+t2_engine_util_buffers = ../../simulator/trellis2/pollyn_engine/engine/util_buffers.pka
+t2_engine_util_mesh = ../../simulator/trellis2/pollyn_engine/engine/util_mesh.pka
+t2_engine_util_camera = ../../simulator/trellis2/pollyn_engine/engine/util_camera.pka
+t2_engine_util_text = ../../simulator/trellis2/pollyn_engine/engine/util_text.pka
+t2_engine_util_lights = ../../simulator/trellis2/pollyn_engine/engine/util_lights.pka
+t2_mujoco = ../../simulator/trellis2/src/mujoco.pka
+t2_scene = ../../simulator/trellis2/src/scene.pka
+t2_depth_sensor = ../../simulator/trellis2/src/depth_sensor.pka
+t2_camera_view = ../../simulator/trellis2/src/camera_view.pka
+t2_robot_sim = ../../simulator/trellis2/src/robot_sim.pka
+t2_robot_main = ../../simulator/trellis2/src/robot_main.pka
+t2_main = ../../simulator/trellis2/src/main.pka
+t2_roseviz_app = ../../simulator/trellis2/cmd/roseviz/roseviz_app.pka
+t2_roseviz_main = ../../simulator/trellis2/cmd/roseviz/roseviz_main.pka
+t2_roseviz_bridge = ../../simulator/trellis2/cmd/roseviz/roseviz_bridge.c
+t2_roseviz_falling_ball = ../../simulator/trellis2/cmd/roseviz/roseviz_falling_ball.c
+t2_image_view_main = ../../simulator/trellis2/cmd/image_view/image_view_main.pka
+t2_image_view_bridge = ../../simulator/trellis2/cmd/image_view/image_view_bridge.c
+t2_test_physics = ../../simulator/trellis2/test/test_physics.pka
+t2_test_camera_intrinsics = ../../simulator/trellis2/test/test_camera_intrinsics.pka
+t2_test_object_draw_colors = ../../simulator/trellis2/test/test_object_draw_colors.pka
+t2_test_alpha_mask = ../../simulator/trellis2/test/test_alpha_mask.pka
+t2_test_pbr_ibl = ../../simulator/trellis2/test/test_pbr_ibl.pka
+t2_test_pbr_multi_light = ../../simulator/trellis2/test/test_pbr_multi_light.pka
+t2_test_pbr_normal_map = ../../simulator/trellis2/test/test_pbr_normal_map.pka
+t2_test_pbr_orm = ../../simulator/trellis2/test/test_pbr_orm.pka
+t2_test_pbr_terminal_room = ../../simulator/trellis2/test/test_pbr_terminal_room.pka
+t2_test_render = ../../simulator/trellis2/test/test_render.pka
+t2_test_cv = ../../simulator/trellis2/test/test_cv.pka
+t2_test_depth = ../../simulator/trellis2/test/test_depth.pka
+t2_test_texture2d = ../../simulator/trellis2/test/test_texture2d.pka
+t2_test_roseviz_ui = ../../simulator/trellis2/test/test_roseviz_ui.pka
+t2_test_roseviz_bridge = ../../simulator/trellis2/test/test_roseviz_bridge.pka
+t2_test_roseviz_palette = ../../simulator/trellis2/test/test_roseviz_palette.pka
+t2_test_roseviz_sidebar = ../../simulator/trellis2/test/test_roseviz_sidebar.pka
+t2_test_roseviz_decode = ../../simulator/trellis2/test/test_roseviz_decode.pka
+t2_test_roseviz_layout = ../../simulator/trellis2/test/test_roseviz_layout.pka
+t2_test_roseviz_tf = ../../simulator/trellis2/test/test_roseviz_tf.pka
+t2_test_roseviz_sim = ../../simulator/trellis2/test/test_roseviz_sim.pka
+t2_gl_shim = ../../simulator/trellis2/pollyn_engine/shim/pollyn_shim.c
+t2_mj_shim = ../../simulator/trellis2/shim/mujoco_shim.c
+t2_robot_shim = ../../simulator/trellis2/shim/mujoco_robot_shim.c
 
 pka_srcs_engine_compiler = $t2_math3d $t2_color $t2_mesh $t2_material $t2_camera $t2_input $t2_terminal $t2_text $t2_overlay2d $t2_cv $t2_renderer $t2_engine_core $t2_engine_util_buffers $t2_engine_util_mesh $t2_engine_util_camera $t2_engine_util_text $t2_engine_util_lights
 
 # Shader dir
 shader_dir = pollyn_engine/shaders
+shader_inc = -I../../simulator/trellis2/pollyn_engine/shim
 
 rule pikacc
-  command = cd ../compiler && LIBS="$libs" CFLAGS_EXTRA="$cflags" bin/pikacc $srcs --platform $platform -o ../trellis2/$out
+  command = cd /home/alec/code/pika/pika && python3 ../../simulator/trellis2/pollyn_engine/shaders/embed.py && PATH="$$PWD/bin:$$PATH" LIBS="$libs" CFLAGS_EXTRA="$shader_inc $cflags" bin/pikacc.sh $srcs --platform $platform -o ../../simulator/trellis2/$out
   description = PIKACC $out
 
 rule pikacc_sh
-  command = cd ../compiler && PATH="$$PWD/bin:$$PATH" LIBS="$libs" CFLAGS_EXTRA="$cflags" bin/pikacc.sh $srcs --platform $platform -o ../trellis2/$out
+  command = cd /home/alec/code/pika/pika && python3 ../../simulator/trellis2/pollyn_engine/shaders/embed.py && PATH="$$PWD/bin:$$PATH" LIBS="$libs" CFLAGS_EXTRA="$shader_inc $cflags" bin/pikacc.sh $srcs --platform $platform -o ../../simulator/trellis2/$out
   description = PIKACC_SH $out
 
 rule run
-  command = cd /home/claude/source/pollyn2/trellis2 && $cmd && touch $out
+  command = cd /home/alec/code/simulator/trellis2 && $cmd && touch $out
   description = RUN $cmd
 
 rule ccbin
@@ -124,11 +135,12 @@ rule ccbin
 
 # Link order: static libs first, then system libs (for symbol resolution)
 all_libs = $mujoco_lib $mujoco_extra $gl_libs
+robot_libs = $mujoco_lib $mujoco_extra $rose_libs $gl_libs
 roseviz_libs = $rose_libs $gl_libs
 bridge_libs = $rose_libs -lrt -lm -lpthread -ldl
 
 build $builddir/.rose_deps.ok: run
-  cmd = make -C ../rose/mirage CC=clang && make -C ../rose/quicksand CC=clang && make -C ../rose/ros3 CC=clang build/ros3_so.o build/rosecore build/rosetopic build/test_visual_pub
+  cmd = make -C ../../rose/mirage CC=clang && make -C ../../rose/quicksand CC=clang && make -C ../../rose/ros3 CC=clang build/ros3_so.o build/rosecore build/rosetopic build/test_net_pub
 
 build $builddir/roseviz_falling_ball: ccbin $src_roseviz_falling_ball | $builddir/.rose_deps.ok
   libs = $bridge_libs
@@ -221,11 +233,23 @@ build $builddir/trellis2: pikacc $src_math3d $src_color $src_mesh $src_material 
   libs = $all_libs
   cflags = $mujoco_inc
 
+# Threaded rover simulator
+build $builddir/robot_sim: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_mujoco $src_scene $src_depth_sensor $src_camera_view $src_robot_sim $src_robot_main $gl_shim $robot_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/constant.vert $shader_dir/constant.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok
+  srcs = $pka_srcs_engine_compiler $t2_mujoco $t2_scene $t2_depth_sensor $t2_camera_view $t2_robot_sim $t2_robot_main $t2_gl_shim $t2_robot_shim
+  libs = $robot_libs
+  cflags = $mujoco_inc $rose_inc -I../../simulator/trellis2/pollyn_engine/shim
+
 # Roseviz shell (images + point clouds only)
 build $builddir/roseviz: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_roseviz_app $src_roseviz_main $src_roseviz_bridge $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/constant.vert $shader_dir/constant.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok $builddir/roseviz_falling_ball
   srcs = $pka_srcs_engine_compiler $t2_roseviz_app $t2_roseviz_main $t2_roseviz_bridge $t2_gl_shim
   libs = $roseviz_libs
   cflags = $rose_inc
+
+# Simple ROS3 image viewer
+build $builddir/image_view: pikacc $src_math3d $src_color $src_mesh $src_material $src_camera $src_input $src_terminal $src_text $src_overlay2d $src_cv $src_renderer $src_engine_core $src_engine_util_buffers $src_engine_util_mesh $src_engine_util_camera $src_engine_util_text $src_engine_util_lights $src_image_view_main $src_image_view_bridge $gl_shim | $shader_dir/flat.vert $shader_dir/flat.frag $shader_dir/pbr.vert $shader_dir/pbr.frag $shader_dir/line.vert $shader_dir/line.frag $shader_dir/depth.vert $shader_dir/depth.frag $shader_dir/constant.vert $shader_dir/constant.frag $shader_dir/text.vert $shader_dir/text.frag $shader_dir/blit.vert $shader_dir/blit.frag $builddir/.rose_deps.ok
+  srcs = $pka_srcs_engine_compiler $t2_image_view_main $t2_image_view_bridge $t2_gl_shim
+  libs = $roseviz_libs
+  cflags = $rose_inc -I../../simulator/trellis2/pollyn_engine/shim
 
 # --- Test runners ---
 
@@ -330,6 +354,7 @@ build test_roseviz_layout: phony $builddir/test_roseviz_layout
 build test_roseviz_tf: phony $builddir/test_roseviz_tf
 build test_roseviz_sim: phony $builddir/test_roseviz_sim
 build trellis2: phony $builddir/trellis2
+build robot_sim: phony $builddir/robot_sim
 build roseviz: phony $builddir/roseviz
 build roseviz_falling_ball: phony $builddir/roseviz_falling_ball
 build check: phony $builddir/.test_physics.ok $builddir/.test_camera_intrinsics.ok $builddir/.test_object_draw_colors.ok $builddir/.test_alpha_mask.ok $builddir/.test_pbr_ibl.ok $builddir/.test_pbr_multi_light.ok $builddir/.test_pbr_normal_map.ok $builddir/.test_pbr_orm.ok $builddir/.test_render.ok $builddir/.test_cv.ok $builddir/.test_depth.ok $builddir/.test_texture2d.ok $builddir/.test_roseviz_ui.ok

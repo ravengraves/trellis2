@@ -412,7 +412,9 @@ export fn e2_pass_3d_geom(rt: *E2Runtime,
 		let mvp = mat4_mul(&vp, &d.model);
 
 		if (camera_mode == E2_GEOM_MODE_DEPTH) {
-			shim_gl_begin_depth(&mvp.d[0z], cam.znear, cam.zfar);
+			shim_gl_begin_depth(&mvp.d[0z], &d.model.d[0z],
+				cam.eye.x, cam.eye.y, cam.eye.z,
+				cam.znear, cam.zfar);
 			shim_gl_draw_mesh_handles(d.mesh.vbo, d.mesh.ibo, d.mesh.index_count);
 			continue;
 		};
@@ -651,6 +653,7 @@ export fn e2_init_blit_shader() bool = {
 export fn e2_pass_2d_texture(rt: *E2Runtime, tex: *E2GpuTexture,
 	x: i32, y: i32, w: i32, h: i32) void = {
 	if (!tex.valid) { return; };
+	if (!e2_init_blit_shader()) { return; };
 	let sw: i32 = 0;
 	let sh: i32 = 0;
 	e2_target_dims(rt, &sw, &sh);
@@ -715,9 +718,17 @@ export fn e2_pass_text(rt: *E2Runtime) void = {
 	};
 };
 
+fn e2_runtime_sleep_target(rt: *E2Runtime) void = {
+	if (rt.target_fps <= 0) { return; };
+	let target_ns: i64 = 1000000000i64 / (rt.target_fps: i64);
+	let frame_ms: i32 = (target_ns / 1000000i64): i32;
+	if (frame_ms > 0) { proc::MilliSleep(frame_ms); };
+};
+
 export fn e2_runtime_present(rt: *E2Runtime) void = {
 	if (rt.mode == E2_MODE_WINDOW) {
 		shim_window_swap();
+		e2_runtime_sleep_target(rt);
 		return;
 	};
 	if (rt.mode == E2_MODE_HEADLESS) {
@@ -767,7 +778,7 @@ export fn e2_runtime_present(rt: *E2Runtime) void = {
 	};
 	rt.text_pass_pending = false;
 
-	rt.last_term_draw_ms = clock::Since(draw_t0_tick) * 1000.0f64;
+	rt.last_term_draw_ms = clock::Elapsed(draw_t0_tick) * 1000.0f64;
 	rt.last_term_changed_cells = changed_cells;
 	rt.last_term_total_cells = rt.term_back.cols * rt.term_back.rows;
 	if (rt.term_present_mode == E2_TERM_PRESENT_LINES) {
@@ -775,14 +786,10 @@ export fn e2_runtime_present(rt: *E2Runtime) void = {
 	};
 	rt.term_last_style = rt.term_style;
 	rt.term_last_present_mode = rt.term_present_mode;
-
-	let target_ns: i64 = 1000000000i64 / (rt.target_fps: i64);
-	let frame_ms: i32 = (target_ns / 1000000i64): i32;
-	if (frame_ms > 0) { proc::MilliSleep(frame_ms); };
+	e2_runtime_sleep_target(rt);
 };
 
-// Explicit offscreen render/export path for any camera, including main camera.
-export fn e2_render_camera_to_buffers(
+fn e2_render_camera_rgb_to_buffer_bg(
 	cam: *FreeCamera,
 	camera_mode: i32,
 	geom_draws: []E2GeomDraw,
@@ -790,8 +797,8 @@ export fn e2_render_camera_to_buffers(
 	point_draws: []E2ColorDraw,
 	lights: []Light,
 	env: *IrradianceEnv,
+	clear: Color,
 	out_rgb: []u8,
-	out_depth: []f32,
 	w: i32,
 	h: i32) bool = {
 	if (w <= 0 || h <= 0) { return false; };
@@ -801,7 +808,7 @@ export fn e2_render_camera_to_buffers(
 	shim_gl_fbo_create(w, h);
 	shim_gl_fbo_bind();
 	shim_gl_viewport(0, 0, w, h);
-	shim_gl_clear(0.0, 0.0, 0.0, 1.0);
+	shim_gl_clear(clear.r, clear.g, clear.b, clear.a);
 	shim_gl_enable_depth();
 	shim_gl_enable_blend();
 
@@ -832,10 +839,12 @@ export fn e2_render_camera_to_buffers(
 		let gdraw = geom_draws[i];
 		if (gdraw.mesh == (0: uintptr: *E2GpuMesh)) { continue; };
 		if (!gdraw.mesh.valid || gdraw.mesh.index_count <= 0) { continue; };
-		let mvp = mat4_mul(&vp, &gdraw.model);
-		if (camera_mode == E2_GEOM_MODE_DEPTH) {
-			shim_gl_begin_depth(&mvp.d[0z], cam.znear, cam.zfar);
-		} else if (camera_mode == E2_GEOM_MODE_CONSTANT_COLOR) {
+			let mvp = mat4_mul(&vp, &gdraw.model);
+			if (camera_mode == E2_GEOM_MODE_DEPTH) {
+				shim_gl_begin_depth(&mvp.d[0z], &gdraw.model.d[0z],
+					cam.eye.x, cam.eye.y, cam.eye.z,
+					cam.znear, cam.zfar);
+			} else if (camera_mode == E2_GEOM_MODE_CONSTANT_COLOR) {
 			shim_gl_begin_constant(&mvp.d[0z],
 				gdraw.material.albedo.r, gdraw.material.albedo.g,
 				gdraw.material.albedo.b, gdraw.material.albedo.a);
@@ -890,24 +899,106 @@ export fn e2_render_camera_to_buffers(
 	};
 
 	shim_gl_fbo_read_pixels_flipped(out_rgb.data, w, h);
+	shim_gl_disable_blend();
+	shim_gl_fbo_unbind();
+	shim_gl_fbo_destroy();
+	return true;
+};
 
-	if (out_depth.len >= (w * h): size) {
-		shim_gl_clear(0.0, 0.0, 0.0, 1.0);
-		shim_gl_enable_depth();
-		for (let di: size = 0z; di < geom_draws.len; di += 1z) {
-			let depth_draw = geom_draws[di];
-			if (depth_draw.mesh == (0: uintptr: *E2GpuMesh)) { continue; };
-			if (!depth_draw.mesh.valid || depth_draw.mesh.index_count <= 0) { continue; };
-			let depth_mvp = mat4_mul(&vp, &depth_draw.model);
-			shim_gl_begin_depth(&depth_mvp.d[0z], cam.znear, cam.zfar);
-			shim_gl_set_material_textures(depth_draw.material.texture,
-				depth_draw.material.orm_texture, depth_draw.material.normal_texture);
-			shim_gl_draw_mesh_handles(depth_draw.mesh.vbo, depth_draw.mesh.ibo, depth_draw.mesh.index_count);
-		};
-		shim_gl_fbo_read_depth_encoded(out_depth.data, w, h, cam.znear, cam.zfar);
+fn e2_render_camera_depth_to_buffer(
+	cam: *FreeCamera,
+	geom_draws: []E2GeomDraw,
+	out_depth: []f32,
+	w: i32,
+	h: i32) bool = {
+	if (w <= 0 || h <= 0) { return false; };
+	if (out_depth.len < (w * h): size) { return false; };
+
+	shim_gl_disable_blend();
+	shim_gl_fbo_create(w, h);
+	shim_gl_fbo_bind();
+	shim_gl_viewport(0, 0, w, h);
+	// Clear the packed depth target to "far/no hit" before depth-only shading.
+	shim_gl_clear(1.0, 1.0, 1.0, 1.0);
+	shim_gl_enable_depth();
+
+	let vp = freecam_view_projection(cam, w, h);
+	for (let di: size = 0z; di < geom_draws.len; di += 1z) {
+		let depth_draw = geom_draws[di];
+		if (depth_draw.mesh == (0: uintptr: *E2GpuMesh)) { continue; };
+		if (!depth_draw.mesh.valid || depth_draw.mesh.index_count <= 0) { continue; };
+		let depth_mvp = mat4_mul(&vp, &depth_draw.model);
+		shim_gl_begin_depth(&depth_mvp.d[0z], &depth_draw.model.d[0z],
+			cam.eye.x, cam.eye.y, cam.eye.z,
+			cam.znear, cam.zfar);
+		shim_gl_set_material_textures(depth_draw.material.texture,
+			depth_draw.material.orm_texture, depth_draw.material.normal_texture);
+		shim_gl_draw_mesh_handles(depth_draw.mesh.vbo, depth_draw.mesh.ibo, depth_draw.mesh.index_count);
 	};
+	shim_gl_fbo_read_depth_encoded(out_depth.data, w, h, cam.znear, cam.zfar);
 
 	shim_gl_fbo_unbind();
 	shim_gl_fbo_destroy();
 	return true;
+};
+
+// Explicit offscreen render/export path for any camera, including main camera.
+export fn e2_render_camera_to_buffers_bg(
+	cam: *FreeCamera,
+	camera_mode: i32,
+	geom_draws: []E2GeomDraw,
+	line_draws: []E2ColorDraw,
+	point_draws: []E2ColorDraw,
+	lights: []Light,
+	env: *IrradianceEnv,
+	clear: Color,
+	out_rgb: []u8,
+	out_depth: []f32,
+	w: i32,
+	h: i32) bool = {
+	if (!e2_render_camera_rgb_to_buffer_bg(
+		cam,
+		camera_mode,
+		geom_draws,
+		line_draws,
+		point_draws,
+		lights,
+		env,
+		clear,
+		out_rgb,
+		w,
+		h)) {
+		return false;
+	};
+	if (out_depth.len < (w * h): size) {
+		return true;
+	};
+	return e2_render_camera_depth_to_buffer(cam, geom_draws, out_depth, w, h);
+};
+
+export fn e2_render_camera_to_buffers(
+	cam: *FreeCamera,
+	camera_mode: i32,
+	geom_draws: []E2GeomDraw,
+	line_draws: []E2ColorDraw,
+	point_draws: []E2ColorDraw,
+	lights: []Light,
+	env: *IrradianceEnv,
+	out_rgb: []u8,
+	out_depth: []f32,
+	w: i32,
+	h: i32) bool = {
+	return e2_render_camera_to_buffers_bg(
+		cam,
+		camera_mode,
+		geom_draws,
+		line_draws,
+		point_draws,
+		lights,
+		env,
+		color_new(0.0, 0.0, 0.0, 1.0),
+		out_rgb,
+		out_depth,
+		w,
+		h);
 };

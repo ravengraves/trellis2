@@ -387,6 +387,87 @@ export fn mesh_create_sphere(slices: i32, stacks: i32) Mesh = {
 };
 
 // ================================================================
+// CAPSULE: centered at origin, radius 0.5, axis along +Y/-Y
+// half_length_ratio is the cylinder half-length measured in radii.
+// ================================================================
+
+export fn mesh_create_capsule(slices: i32, stacks: i32,
+	half_length_ratio: f32) Mesh = {
+	let m = mesh_init();
+	let cslices = slices;
+	let cstacks = stacks;
+	let ratio = half_length_ratio;
+	if (cslices < 3) { cslices = 3; };
+	if (cstacks < 2) { cstacks = 2; };
+	if (ratio < 0.001) { ratio = 0.001; };
+
+	let hemi_rings = cstacks;
+	let cols = cslices + 1;
+	let ring_count = hemi_rings + 2 + hemi_rings;
+	let cyl_half = 0.5 * ratio;
+
+	let ring_y: [128]f32 = [0.0...];
+	let ring_r: [128]f32 = [0.0...];
+	let ring_idx: i32 = 0;
+
+	for (let i: i32 = 0; i <= hemi_rings; i += 1) {
+		let top_phi = ((i: f32) / (hemi_rings: f32)) * (math::PI * 0.5);
+		let top_sc = math::sincos(top_phi);
+		ring_r[ring_idx: size] = top_sc.s * 0.5;
+		ring_y[ring_idx: size] = cyl_half + top_sc.c * 0.5;
+		ring_idx = ring_idx + 1;
+	};
+
+	ring_r[ring_idx: size] = 0.5;
+	ring_y[ring_idx: size] = -cyl_half;
+	ring_idx = ring_idx + 1;
+
+	for (let i: i32 = hemi_rings - 1; i >= 0; i -= 1) {
+		let bot_phi = ((i: f32) / (hemi_rings: f32)) * (math::PI * 0.5);
+		let bot_sc = math::sincos(bot_phi);
+		ring_r[ring_idx: size] = bot_sc.s * 0.5;
+		ring_y[ring_idx: size] = -cyl_half - bot_sc.c * 0.5;
+		ring_idx = ring_idx + 1;
+	};
+
+	for (let ring: i32 = 0; ring < ring_count; ring += 1) {
+		let y = ring_y[ring: size];
+		let r = ring_r[ring: size];
+		let v = (ring: f32) / ((ring_count - 1): f32);
+		for (let i: i32 = 0; i <= cslices; i += 1) {
+			let theta = ((i: f32) / (cslices: f32)) * math::TAU;
+			let theta_sc = math::sincos(theta);
+			let x = theta_sc.c * r;
+			let z = theta_sc.s * r;
+			let normal = vec3_new(x, 0.0, z);
+			if (y > cyl_half) {
+				normal.y = y - cyl_half;
+			} else if (y < -cyl_half) {
+				normal.y = y + cyl_half;
+			};
+			normal = vec3_normalize(normal);
+			mesh_add_vert(&m, x, y, z, normal.x, normal.y, normal.z,
+				(i: f32) / (cslices: f32), v);
+		};
+	};
+
+	let row = cols;
+	for (let ring: i32 = 0; ring < ring_count - 1; ring += 1) {
+		for (let i: i32 = 0; i < cslices; i += 1) {
+			let a: u16 = (ring * row + i): u16;
+			let b: u16 = ((ring + 1) * row + i): u16;
+			let c: u16 = ((ring + 1) * row + i + 1): u16;
+			let d: u16 = (ring * row + i + 1): u16;
+			mesh_add_tri(&m, a, b, d);
+			mesh_add_tri(&m, d, b, c);
+		};
+	};
+
+	mesh_generate_tangents(&m);
+	return m;
+};
+
+// ================================================================
 // CYLINDER: centered at origin, radius 0.5, height 1 along +Z/-Z
 // ================================================================
 

@@ -112,7 +112,39 @@ export fn camera_view_render(view: *CameraView,
 			view.sensor.width, view.sensor.height,
 			view.sensor.cam.znear, view.sensor.cam.zfar);
 	} else {
-		// Copy RGB data
+		for (let ci: size = 0z; ci < nrgb; ci += 1z) {
+			view.display_buf[ci] = view.sensor.rgb[ci];
+		};
+	};
+
+	if (!view.initialized) {
+		view.texture = e2_gpu_texture_create_rgb(
+			view.display_buf[0z..nrgb],
+			view.sensor.width, view.sensor.height);
+		view.initialized = true;
+	} else {
+		e2_gpu_texture_update_rgb(&view.texture,
+			view.display_buf[0z..nrgb]);
+	};
+	return true;
+};
+
+export fn camera_view_render_bg(view: *CameraView,
+	geom_draws: []E2GeomDraw, lights: []Light,
+	env: *IrradianceEnv, clear: Color) bool = {
+	let ok = depth_sensor_render_bg(&view.sensor, geom_draws, lights, env, clear);
+	if (!ok) { return false; };
+
+	let npix: size = (view.sensor.width * view.sensor.height): size;
+	let nrgb: size = npix * 3z;
+
+	if (view.mode == CAMVIEW_MODE_DEPTH) {
+		depth_to_rgb(
+			view.sensor.depth[0z..npix],
+			view.display_buf[0z..nrgb],
+			view.sensor.width, view.sensor.height,
+			view.sensor.cam.znear, view.sensor.cam.zfar);
+	} else {
 		for (let ci: size = 0z; ci < nrgb; ci += 1z) {
 			view.display_buf[ci] = view.sensor.rgb[ci];
 		};
@@ -136,6 +168,44 @@ export fn camera_view_draw(view: *CameraView, rt: *E2Runtime) void = {
 	e2_pass_2d_texture(rt, &view.texture,
 		view.screen_x, view.screen_y,
 		view.screen_w, view.screen_h);
+};
+
+// Anchor the camera view to the top-right corner while preserving aspect ratio.
+export fn camera_view_layout_top_right(view: *CameraView, rt: *E2Runtime,
+	margin_px: i32, width_frac: f32, height_frac: f32) void = {
+	let sw = rt.fb.width;
+	let sh = rt.fb.height;
+	if (rt.mode == E2_MODE_WINDOW) {
+		sw = shim_window_width();
+		sh = shim_window_height();
+	};
+	if (sw <= 0 || sh <= 0 || view.sensor.width <= 0 || view.sensor.height <= 0) {
+		return;
+	};
+
+	let margin = margin_px;
+	if (margin < 0) { margin = 0; };
+
+	let max_w = ((sw: f32) * width_frac): i32;
+	let max_h = ((sh: f32) * height_frac): i32;
+	if (max_w <= 0) { max_w = sw / 3; };
+	if (max_h <= 0) { max_h = sh / 3; };
+
+	let view_w = max_w;
+	let view_h = (((view_w: f32) * (view.sensor.height: f32)) / (view.sensor.width: f32)): i32;
+	if (view_h > max_h) {
+		view_h = max_h;
+		view_w = (((view_h: f32) * (view.sensor.width: f32)) / (view.sensor.height: f32)): i32;
+	};
+	if (view_w < 1) { view_w = 1; };
+	if (view_h < 1) { view_h = 1; };
+
+	let x = sw - margin - view_w;
+	let y = margin;
+	view.screen_w = view_w;
+	view.screen_h = view_h;
+	view.screen_x = x;
+	view.screen_y = y;
 };
 
 // Update the sensor's camera pose.

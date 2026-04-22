@@ -191,6 +191,8 @@ export fn main() void = {
 	fb::Println(&depth_tf);
 	assert(depth_visible_max > depth_hidden_max + 0.02,
 		"depth output separates opaque and transparent halves");
+	assert(depth_hidden_max > 19.0,
+		"transparent half keeps far-depth background");
 	assert_mask_split(depth_visible, depth_hidden, 1);
 
 	let no_depth: [1]f32 = [0.0];

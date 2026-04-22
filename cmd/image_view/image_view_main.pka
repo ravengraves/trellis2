@@ -1,0 +1,303 @@
+use args;
+use fb;
+use strings;
+
+@symbol("image_view_bridge_init") fn image_view_bridge_init(
+	topic: *u8,
+	width: i32,
+	height: i32,
+	channels: i32,
+	input_buffer_size: i32,
+	latest_only: i32) i32;
+@symbol("image_view_bridge_shutdown") fn image_view_bridge_shutdown() void;
+@symbol("image_view_bridge_poll") fn image_view_bridge_poll() void;
+@symbol("image_view_bridge_seq") fn image_view_bridge_seq() u64;
+@symbol("image_view_bridge_status") fn image_view_bridge_status() i32;
+@symbol("image_view_bridge_copy_rgb") fn image_view_bridge_copy_rgb(
+	out_rgb: *u8, max_bytes: i32,
+	out_w: *i32, out_h: *i32, out_channels: *i32) i32;
+
+def IMAGE_VIEW_MAX_W: i32 = 1920;
+def IMAGE_VIEW_MAX_H: i32 = 1080;
+def IMAGE_VIEW_MAX_RGB: size = 6220800z;
+
+let image_view_rgb_buf: [IMAGE_VIEW_MAX_RGB]u8 = [0...];
+
+type ImageViewRect = struct {
+	x: i32,
+	y: i32,
+	w: i32,
+	h: i32,
+};
+
+type ImageViewCli = struct {
+	topic: str,
+	width: i32,
+	height: i32,
+	channels: i32,
+	input_buffer_size: i32,
+	latest_only: i32,
+	valid: bool,
+	show_help: bool,
+};
+
+fn image_view_print_usage() void = {
+	fb::Printsln("usage: image_view [--terminal] [--half-cell] [--term-lines] [--smoke]");
+	fb::Printsln("                  [--topic TOPIC] [--width PIXELS] [--height PIXELS]");
+	fb::Printsln("                  [--channels COUNT] [--input-buffer-size BYTES]");
+	fb::Printsln("                  [--latest-only 0|1] [TOPIC]");
+	fb::Printsln("defaults: width/height/channels are auto-inferred when possible");
+};
+
+fn image_view_is_flag(arg: str) bool = {
+	let data = strings::toutf8(arg);
+	return data.len >= 1z && data[0z] == '-';
+};
+
+fn image_view_parse_i32(arg: str) i32 = {
+	let data = strings::toutf8(arg);
+	if (data.len == 0z) {
+		return 0;
+	};
+	let sign: i32 = 1;
+	let start: size = 0z;
+	if (data[0z] == ('-': u8)) {
+		sign = -1;
+		start = 1z;
+	};
+	let out: i32 = 0;
+	for (let i: size = start; i < data.len; i += 1z) {
+		let ch = data[i];
+		if (ch < ('0': u8) || ch > ('9': u8)) {
+			return 0;
+		};
+		out = (out * 10) + ((ch - ('0': u8)): i32);
+	};
+	return out * sign;
+};
+
+fn image_view_parse_cli() ImageViewCli = {
+	let cfg = ImageViewCli {
+		topic = "/camera/rgb",
+		width = 0,
+		height = 0,
+		channels = 0,
+		input_buffer_size = 8388608,
+		latest_only = 1,
+		valid = true,
+		show_help = false,
+	};
+	let topic_set = false;
+	let argc = args::Count();
+
+	for (let i: i32 = 1; i < argc; i += 1) {
+		let arg = args::At(i);
+		if (arg == "--help") {
+			cfg.show_help = true;
+			return cfg;
+		};
+		if (arg == "--terminal" || arg == "--half-cell" ||
+			arg == "--term-lines" || arg == "--smoke") {
+			continue;
+		};
+		if (arg == "--topic" || arg == "--width" || arg == "--height" ||
+			arg == "--channels" || arg == "--input-buffer-size" ||
+			arg == "--latest-only") {
+			if (i + 1 >= argc) {
+				cfg.valid = false;
+				return cfg;
+			};
+			i = i + 1;
+			let value = args::At(i);
+			if (arg == "--topic") {
+				cfg.topic = value;
+				topic_set = true;
+			} else if (arg == "--width") {
+				cfg.width = image_view_parse_i32(value);
+			} else if (arg == "--height") {
+				cfg.height = image_view_parse_i32(value);
+			} else if (arg == "--channels") {
+				cfg.channels = image_view_parse_i32(value);
+			} else if (arg == "--input-buffer-size") {
+				cfg.input_buffer_size = image_view_parse_i32(value);
+			} else {
+				cfg.latest_only = image_view_parse_i32(value);
+			};
+			continue;
+		};
+		if (!image_view_is_flag(arg) && !topic_set) {
+			cfg.topic = arg;
+			topic_set = true;
+			continue;
+		};
+		cfg.valid = false;
+		return cfg;
+	};
+
+	if (cfg.input_buffer_size <= 0 ||
+		(cfg.latest_only != 0 && cfg.latest_only != 1)) {
+		cfg.valid = false;
+	};
+	if ((cfg.width < 0) || (cfg.height < 0) || (cfg.channels < 0)) {
+		cfg.valid = false;
+	};
+	return cfg;
+};
+
+fn image_view_target_rect(rt: *E2Runtime) ImageViewRect = {
+	let w = rt.fb.width;
+	let h = rt.fb.height;
+	if (rt.mode == E2_MODE_WINDOW) {
+		w = shim_window_width();
+		h = shim_window_height();
+	};
+	return ImageViewRect { x = 0, y = 0, w = w, h = h };
+};
+
+fn image_view_fit_image(bounds: *ImageViewRect, img_w: i32, img_h: i32) ImageViewRect = {
+	let out = *bounds;
+	if (bounds.w <= 0 || bounds.h <= 0 || img_w <= 0 || img_h <= 0) {
+		return out;
+	};
+
+	let bounds_aspect = (bounds.w: f32) / (bounds.h: f32);
+	let img_aspect = (img_w: f32) / (img_h: f32);
+
+	if (img_aspect > bounds_aspect) {
+		let fit_h = ((bounds.w: f32) / img_aspect): i32;
+		out.x = bounds.x;
+		out.w = bounds.w;
+		out.h = fit_h;
+		out.y = bounds.y + (bounds.h - fit_h) / 2;
+		return out;
+	};
+
+	let fit_w = ((bounds.h: f32) * img_aspect): i32;
+	out.y = bounds.y;
+	out.h = bounds.h;
+	out.w = fit_w;
+	out.x = bounds.x + (bounds.w - fit_w) / 2;
+	return out;
+};
+
+export fn main() void = {
+	let cli = image_view_parse_cli();
+	if (cli.show_help) {
+		image_view_print_usage();
+		return;
+	};
+	if (!cli.valid) {
+		image_view_print_usage();
+		return;
+	};
+
+	let topic_u8 = strings::toutf8(cli.topic);
+	let bridge_rc = image_view_bridge_init(
+		topic_u8.data,
+		cli.width,
+		cli.height,
+		cli.channels,
+		cli.input_buffer_size,
+		cli.latest_only);
+	if (bridge_rc <= 0) {
+		return;
+	};
+
+	let mode = E2_MODE_WINDOW;
+	if (args::Has("--terminal")) {
+		mode = E2_MODE_TERMINAL;
+	};
+	let smoke = args::Has("--smoke");
+
+	let rt = e2_runtime_init(mode, 1280, 800);
+	if (args::Has("--half-cell")) {
+		rt.term_style = E2_TERM_HALF_CELL;
+	};
+	if (args::Has("--term-lines")) {
+		rt.term_present_mode = E2_TERM_PRESENT_LINES;
+	};
+	rt.target_fps = 30;
+	if (!e2_runtime_start(&rt)) {
+		fb::Printsln("image_view: engine start failed");
+		image_view_bridge_shutdown();
+		return;
+	};
+	if (!e2_init_blit_shader()) {
+		fb::Printsln("image_view: blit shader init failed");
+		e2_runtime_shutdown(&rt);
+		image_view_bridge_shutdown();
+		return;
+	};
+
+	let tex = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false };
+	let has_frame = false;
+	let last_seq = 0u64;
+	let first_frame = true;
+	let frames: i32 = 0;
+
+	for (e2_runtime_should_run(&rt)) {
+		e2_runtime_begin_frame(&rt);
+		image_view_bridge_poll();
+
+		let seq = image_view_bridge_seq();
+		if (seq != 0u64 && seq != last_seq) {
+			let out_w: i32 = 0;
+			let out_h: i32 = 0;
+			let out_c: i32 = 0;
+			let pixels = image_view_bridge_copy_rgb(
+				&image_view_rgb_buf[0z], IMAGE_VIEW_MAX_RGB: i32,
+				&out_w, &out_h, &out_c);
+			if (pixels > 0 && out_w > 0 && out_h > 0) {
+				if (!tex.valid || tex.width != out_w || tex.height != out_h) {
+					if (tex.valid) {
+						e2_gpu_texture_destroy(&tex);
+					};
+					let handle = shim_gl_create_texture_rgb(&image_view_rgb_buf[0z], out_w, out_h);
+					tex = E2GpuTexture {
+						handle = handle,
+						width = out_w,
+						height = out_h,
+						valid = handle > 0u32,
+					};
+				} else {
+					shim_gl_update_texture_rgb(tex.handle, &image_view_rgb_buf[0z], out_w, out_h);
+				};
+				has_frame = tex.valid;
+				last_seq = seq;
+				if (first_frame) {
+					fb::Printsln("image_view: received first frame");
+					first_frame = false;
+				};
+			};
+		};
+
+		e2_pass_begin(&rt, color_new(0.08, 0.09, 0.11, 1.0));
+		if (has_frame && tex.valid) {
+			let bounds = image_view_target_rect(&rt);
+			let fit = image_view_fit_image(&bounds, tex.width, tex.height);
+			e2_pass_2d_texture(&rt, &tex, fit.x, fit.y, fit.w, fit.h);
+		};
+		e2_pass_end(&rt);
+
+		if (!has_frame) {
+			let status = image_view_bridge_status();
+			if (status < 0) {
+				e2_text_add(&rt, 0.03, 0.03, "decode error: check topic shape / fallback dimensions", 255u8, 180u8, 160u8);
+			} else {
+				e2_text_add(&rt, 0.03, 0.03, "waiting for ros3 image topic...", 220u8, 220u8, 220u8);
+			};
+		};
+		e2_pass_text(&rt);
+		e2_runtime_present(&rt);
+		frames = frames + 1;
+		if (smoke && frames >= 2) {
+			rt.running = false;
+		};
+	};
+
+	if (tex.valid) {
+		e2_gpu_texture_destroy(&tex);
+	};
+	e2_runtime_shutdown(&rt);
+	image_view_bridge_shutdown();
+};

@@ -31,6 +31,13 @@ int mj_shim_load(unsigned char *path) {
     return 0;
 }
 
+/* Compatibility hook for snapshot-based readers. */
+void mj_shim_snapshot_begin(void) {
+}
+
+void mj_shim_snapshot_end(void) {
+}
+
 /* Step the simulation forward by one timestep. */
 void mj_shim_step(void) {
     if (g_model && g_data) {
@@ -103,6 +110,40 @@ double mj_shim_timestep(void) {
 /* Return model stat extent (for plane scaling). */
 float mj_shim_stat_extent(void) {
     return g_model ? (float)g_model->stat.extent : 5.0f;
+}
+
+/* Return current simulation time. */
+double mj_shim_time(void) {
+    return g_data ? g_data->time : 0.0;
+}
+
+/* Resolve a body id from its MuJoCo name. */
+int mj_shim_body_id(unsigned char *name) {
+    if (!g_model || !name) return -1;
+    return mj_name2id(g_model, mjOBJ_BODY, (const char *)name);
+}
+
+/* Return the number of bodies. */
+int mj_shim_nbody(void) {
+    return g_model ? g_model->nbody : 0;
+}
+
+/* Copy body world position into out. */
+void mj_shim_body_pos(int i, float *out) {
+    if (!g_data || !g_model || !out || i < 0 || i >= g_model->nbody) return;
+    const mjtNum *p = g_data->xpos + i * 3;
+    out[0] = (float)p[0];
+    out[1] = (float)p[1];
+    out[2] = (float)p[2];
+}
+
+/* Copy body world orientation into out (row-major 3x3). */
+void mj_shim_body_mat(int i, float *out) {
+    if (!g_data || !g_model || !out || i < 0 || i >= g_model->nbody) return;
+    const mjtNum *m = g_data->xmat + i * 9;
+    for (int j = 0; j < 9; j++) {
+        out[j] = (float)m[j];
+    }
 }
 
 /* Free model and data. */

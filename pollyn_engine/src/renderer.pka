@@ -357,13 +357,16 @@ export fn render_to_fb(fb: *Framebuffer, instances: *[REND_MAX_INSTANCES]RenderI
 // ================================================================
 
 export @symbol("shim_gl_begin_depth") fn shim_gl_begin_depth(
-	mvp: *f32, znear: f32, zfar: f32) void;
+	mvp: *f32, model: *f32,
+	ex: f32, ey: f32, ez: f32,
+	znear: f32, zfar: f32) void;
 export @symbol("shim_gl_fbo_read_depth_encoded") fn shim_gl_fbo_read_depth_encoded(
 	out: *f32, w: i32, h: i32, znear: f32, zfar: f32) void;
 
 // Render mesh instances using depth shader only (no color, no lighting)
 export fn render_instances_depth(instances: *[REND_MAX_INSTANCES]RenderInstance,
                                   count: i32, mvp_base: *Mat4,
+                                  cam_eye: Vec3,
                                   znear: f32, zfar: f32) void = {
 	let di: i32 = 0;
 	for (di < count) {
@@ -372,7 +375,9 @@ export fn render_instances_depth(instances: *[REND_MAX_INSTANCES]RenderInstance,
 		let full_mvp = mat4_mul(mvp_base, &inst.model);
 		let mesh = inst.mesh;
 
-		shim_gl_begin_depth(&full_mvp.d[0z], znear, zfar);
+		shim_gl_begin_depth(&full_mvp.d[0z], &inst.model.d[0z],
+			cam_eye.x, cam_eye.y, cam_eye.z,
+			znear, zfar);
 		shim_gl_draw_mesh(&mesh.verts[0z], mesh.vert_count * VERT_STRIDE,
 			&mesh.indices[0z], mesh.index_count);
 
@@ -401,10 +406,10 @@ export fn render_to_fb_with_depth(fb: *Framebuffer,
 	// Depth pass
 	shim_gl_fbo_create(fb.width, fb.height);
 	shim_gl_fbo_bind();
-	shim_gl_clear(0.0, 0.0, 0.0, 1.0);
+	shim_gl_clear(1.0, 1.0, 1.0, 1.0);
 	shim_gl_enable_depth();
 	shim_gl_viewport(0, 0, fb.width, fb.height);
-	render_instances_depth(instances, count, mvp, znear, zfar);
+		render_instances_depth(instances, count, mvp, cam_eye, znear, zfar);
 	shim_gl_fbo_read_depth_encoded(&fb.depth[0z], fb.width, fb.height, znear, zfar);
 	shim_gl_fbo_unbind();
 	shim_gl_fbo_destroy();

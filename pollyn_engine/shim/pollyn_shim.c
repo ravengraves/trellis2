@@ -610,7 +610,8 @@ int shim_window_create(int width, int height, unsigned char *title) {
     if (!g_window) { glfwTerminate(); return -1; }
 
     glfwMakeContextCurrent(g_window);
-    glfwSwapInterval(1);
+    glfwSwapInterval(0);
+    glDisable(GL_DITHER);
 
     /* Register all callbacks */
     glfwSetKeyCallback(g_window, cb_key);
@@ -1056,7 +1057,11 @@ void shim_gl_fbo_destroy(void) {
 /* --- Offscreen GL context via EGL pbuffer (portable EGL baseline) --- */
 
 int shim_gl_init_offscreen(void) {
-    return shim_egl_acquire_offscreen(&g_egl, 64, 64);
+    int rc = shim_egl_acquire_offscreen(&g_egl, 64, 64);
+    if (rc == 0) {
+        glDisable(GL_DITHER);
+    }
+    return rc;
 }
 
 /* --- Flipped readback (GL bottom-up → top-down) --- */
@@ -1127,7 +1132,8 @@ static GLint g_line_u_mvp;
 
 /* Depth shader cached locations */
 static GLint g_depth_a_pos, g_depth_a_uv;
-static GLint g_depth_u_mvp, g_depth_u_znear, g_depth_u_zfar;
+static GLint g_depth_u_mvp, g_depth_u_model, g_depth_u_znear, g_depth_u_zfar;
+static GLint g_depth_u_eye_pos;
 static GLint g_depth_u_use_texture, g_depth_u_albedo_tex;
 
 /* Constant color shader cached locations */
@@ -1296,8 +1302,10 @@ int shim_gl_init_shaders(unsigned char *flat_vs, unsigned char *flat_fs,
     g_depth_a_pos  = glGetAttribLocation(g_depth_prog, "a_pos");
     g_depth_a_uv   = glGetAttribLocation(g_depth_prog, "a_uv");
     g_depth_u_mvp  = glGetUniformLocation(g_depth_prog, "u_mvp");
+    g_depth_u_model = glGetUniformLocation(g_depth_prog, "u_model");
     g_depth_u_znear = glGetUniformLocation(g_depth_prog, "u_znear");
     g_depth_u_zfar  = glGetUniformLocation(g_depth_prog, "u_zfar");
+    g_depth_u_eye_pos = glGetUniformLocation(g_depth_prog, "u_eye_pos");
     g_depth_u_use_texture = glGetUniformLocation(g_depth_prog, "u_use_texture");
     g_depth_u_albedo_tex  = glGetUniformLocation(g_depth_prog, "u_albedo_tex");
 
@@ -2035,9 +2043,13 @@ void shim_gl_draw_text_bytes(unsigned char *data, int len,
  * DEPTH RENDERING
  * ================================================================ */
 
-void shim_gl_begin_depth(float *mvp, float znear, float zfar) {
+void shim_gl_begin_depth(float *mvp, float *model,
+                         float ex, float ey, float ez,
+                         float znear, float zfar) {
     glUseProgram(g_depth_prog);
     shim_gl_upload_mvp(g_depth_u_mvp, mvp);
+    glUniformMatrix4fv(g_depth_u_model, 1, GL_FALSE, model);
+    glUniform3f(g_depth_u_eye_pos, ex, ey, ez);
     glUniform1f(g_depth_u_znear, znear);
     glUniform1f(g_depth_u_zfar, zfar);
 }
@@ -2047,6 +2059,9 @@ void shim_gl_fbo_read_depth_encoded(float *out_depth, int w, int h,
     glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
     unsigned char *tmp = (unsigned char *)malloc((size_t)(w * 4));
     float range = zfar - znear;
+    if (range <= 0.0f) {
+        range = 1.0f;
+    }
     for (int row = 0; row < h; row++) {
         int gl_row = h - 1 - row; /* flip Y: GL bottom-up -> top-down */
         glReadPixels(0, gl_row, w, 1, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
@@ -2056,6 +2071,11 @@ void shim_gl_fbo_read_depth_encoded(float *out_depth, int w, int h,
             float b = (float)tmp[x * 4 + 2] / 255.0f;
             float a = (float)tmp[x * 4 + 3] / 255.0f;
             float depth01 = r + g / 255.0f + b / 65025.0f + a / 16581375.0f;
+            if (depth01 < 0.0f) {
+                depth01 = 0.0f;
+            } else if (depth01 > 1.0f) {
+                depth01 = 1.0f;
+            }
             out_depth[row * w + x] = znear + depth01 * range;
         }
     }

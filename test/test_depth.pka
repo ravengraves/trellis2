@@ -82,6 +82,10 @@ export fn main() void = {
 
 	// Count non-zero and near depth pixels
 	let total: i32 = 64 * 48;
+	let depth_lighting_a: [6144]f32 = [0.0...];
+	for (let i: i32 = 0; i < total; i += 1) {
+		depth_lighting_a[i: size] = out_depth[i: size];
+	};
 	let nonzero: i32 = 0;
 	let near5: i32 = 0;
 	let min_d: f32 = 20.0;
@@ -122,6 +126,41 @@ export fn main() void = {
 	// Ball world radius = 0.5 * 0.2 = 0.1, camera dist 1.5, surface at 1.4
 	assert(center_d > 0.1, "center depth above znear");
 	fmt::Printsln("  depth rendering works: OK");
+
+	let alt_lights = util_light_buffer_init();
+	util_light_buffer_clear(&alt_lights);
+	util_light_buffer_add(&alt_lights,
+		light_directional(vec3_new(1.0, 0.3, -0.2), color_new(0.2, 0.7, 1.0, 1.0)));
+	let alt_env = env_default();
+	alt_env.sky_color = color_new(1.0, 0.0, 0.0, 1.0);
+	alt_env.horizon_color = color_new(0.0, 1.0, 0.0, 1.0);
+	alt_env.ground_color = color_new(0.0, 0.0, 1.0, 1.0);
+	let out_depth_alt: [6144]f32 = [0.0...];
+	let ok_light = e2_render_camera_to_buffers(&cam, E2_GEOM_MODE_PBR,
+		geom_pass.draws[0z..(geom_pass.count: size)],
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		util_light_buffer_slice(&alt_lights),
+		&alt_env,
+		out_rgb[0z..],
+		out_depth_alt[0z..],
+		64, 48);
+	assert(ok_light, "alt light render ok");
+	let max_depth_delta: f32 = 0.0;
+	for (let i: i32 = 0; i < total; i += 1) {
+		let depth_delta = out_depth_alt[i: size] - depth_lighting_a[i: size];
+		let adelta = depth_delta;
+		if (adelta < 0.0) { adelta = 0.0 - adelta; };
+		if (adelta > max_depth_delta) {
+			max_depth_delta = adelta;
+		};
+	};
+	fmt::Clear(&tf);
+	fmt::Write(&tf, "  max depth delta under lighting change: ");
+	fmt::Wf64(&tf, max_depth_delta: f64, 6, "dec");
+	fmt::Println(&tf);
+	assert(max_depth_delta < 0.001,
+		"depth rendering stays independent of lighting and environment");
 
 	// ========== Now test with DepthSensor API ==========
 	let sensor = depth_sensor_new(

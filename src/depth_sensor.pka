@@ -1,6 +1,6 @@
 // depth_sensor.pka — Depth sensor for MuJoCo scenes.
 // Renders linearized depth from an arbitrary camera pose via the engine's
-// offscreen depth pass. Output is world-space distance (camera Z) per pixel.
+// offscreen depth pass. Output is projected camera-space depth per pixel.
 
 export def DSENS_MAX_W: i32 = 128;
 export def DSENS_MAX_H: i32 = 96;
@@ -68,6 +68,27 @@ export fn depth_sensor_render(sensor: *DepthSensor,
 		empty.draws[0z..0z],
 		lights,
 		env,
+		sensor.rgb[0z..nrgb],
+			sensor.depth[0z..npix],
+			sensor.width,
+			sensor.height);
+};
+
+export fn depth_sensor_render_bg(sensor: *DepthSensor,
+	geom_draws: []E2GeomDraw, lights: []Light, env: *IrradianceEnv,
+	clear: Color) bool = {
+	let npix: size = (sensor.width * sensor.height): size;
+	let nrgb: size = npix * 3z;
+	let empty = util_color_pass_init();
+	return e2_render_camera_to_buffers_bg(
+		&sensor.cam,
+		E2_GEOM_MODE_PBR,
+		geom_draws,
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		lights,
+		env,
+		clear,
 		sensor.rgb[0z..nrgb],
 		sensor.depth[0z..npix],
 		sensor.width,
