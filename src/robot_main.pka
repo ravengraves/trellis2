@@ -330,7 +330,7 @@ export fn main() void = {
 		depth_topic.data,
 		rgb_message_bytes,
 		depth_message_bytes,
-		64) != 0) {
+		cli.render_fps) != 0) {
 		fb::Printsln("warning: ROS3 render publishers unavailable");
 	};
 	if (mj_shim_ros_motion_init(
@@ -389,8 +389,6 @@ export fn main() void = {
 	let frame_ms: f64 = 0.0;
 	let render_fps = cli.render_fps;
 	let render_period_s: f64 = 1.0f64 / (render_fps: f64);
-	let sensor_pub_period_s = render_period_s;
-	let sensor_pub_last_tick: u64 = rose_now();
 	let physics_step_s: f64 = mj_shim_timestep();
 	if (physics_step_s <= 0.0) {
 		physics_step_s = 1.0f64 / (cli.physics_hz: f64);
@@ -493,15 +491,12 @@ export fn main() void = {
 			&env,
 			bg_color);
 		debug_sensor_ms = debug_sensor_ms + rose_elapsed_seconds(sensor_tick) * 1000.0f64;
-		let sensor_ros_now = rose_now();
-		let sensor_pub_elapsed_s = rose_seconds(sensor_ros_now, sensor_pub_last_tick);
 		if (sensor_ok) {
 			debug_sensor_ok_count = debug_sensor_ok_count + 1;
 		};
-		if (sensor_ok && sensor_pub_elapsed_s >= sensor_pub_period_s) {
+		if (sensor_ok) {
 			let publish_tick = rose_now();
 			if (publish_sensor_topics(&sensor_view)) {
-				sensor_pub_last_tick = sensor_ros_now;
 				debug_publish_count = debug_publish_count + 1;
 			};
 			debug_publish_ms = debug_publish_ms + rose_elapsed_seconds(publish_tick) * 1000.0f64;
