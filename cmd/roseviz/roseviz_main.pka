@@ -50,7 +50,7 @@ export fn main() void = {
 		let sim_path = "./build/roseviz_falling_ball";
 		let sim_argv: [1]str = ["falling_ball"];
 		let log_path = "/tmp/roseviz_falling_ball.log";
-		sim_pid = proc::MustCreateRedirect(sim_path, sim_argv[0z..1z], "", log_path, false, log_path, false);
+		sim_pid = proc::CreateRedirectAssert(sim_path, sim_argv[0z..1z], "", log_path, false, log_path, false);
 	};
 
 	let frame_ms: f64 = 0.0;
@@ -63,7 +63,7 @@ export fn main() void = {
 		util_text_add_fps(&rt, frame_ms, 0.92, 0.01);
 		e2_pass_text(&rt);
 		e2_runtime_present(&rt);
-		frame_ms = clock::Since(t0) * 1000.0f64;
+		frame_ms = clock::Elapsed(t0) * 1000.0f64;
 		frames = frames + 1;
 		if (smoke && frames >= 2) {
 			rt.running = false;

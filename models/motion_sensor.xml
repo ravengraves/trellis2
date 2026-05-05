@@ -1,0 +1,17 @@
+<mujoco model="motion_sensor">
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+
+  <worldbody>
+    <geom name="ground" type="plane" size="0 0 0.05"/>
+    <body name="frame" pos="0 0 1">
+      <freejoint name="root"/>
+      <site name="imu_center" pos="0 0 0" size="0.01"/>
+      <geom name="frame_body" type="box" size="0.1 0.1 0.1" density="500"/>
+    </body>
+  </worldbody>
+
+  <sensor>
+    <gyro name="imu_gyro" site="imu_center"/>
+    <accelerometer name="imu_accel" site="imu_center"/>
+  </sensor>
+</mujoco>

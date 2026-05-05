@@ -128,6 +128,16 @@ int mj_shim_nbody(void) {
     return g_model ? g_model->nbody : 0;
 }
 
+/* Return the number of sites. */
+int mj_shim_nsite(void) {
+    return g_model ? g_model->nsite : 0;
+}
+
+/* Return the number of tendons. */
+int mj_shim_ntendon(void) {
+    return g_model ? g_model->ntendon : 0;
+}
+
 /* Copy body world position into out. */
 void mj_shim_body_pos(int i, float *out) {
     if (!g_data || !g_model || !out || i < 0 || i >= g_model->nbody) return;
@@ -144,6 +154,51 @@ void mj_shim_body_mat(int i, float *out) {
     for (int j = 0; j < 9; j++) {
         out[j] = (float)m[j];
     }
+}
+
+/* Copy site world position into out. */
+void mj_shim_site_pos(int i, float *out) {
+    if (!g_data || !g_model || !out || i < 0 || i >= g_model->nsite) return;
+    const mjtNum *p = g_data->site_xpos + i * 3;
+    out[0] = (float)p[0];
+    out[1] = (float)p[1];
+    out[2] = (float)p[2];
+}
+
+/* Resolve a simple two-site tendon into site ids. */
+int mj_shim_tendon_site_pair(int i, int *out) {
+    if (!g_model || !out || i < 0 || i >= g_model->ntendon) return 0;
+    if (g_model->tendon_num[i] != 2) return 0;
+    int adr = g_model->tendon_adr[i];
+    if (adr < 0 || adr + 1 >= g_model->nwrap) return 0;
+    if (g_model->wrap_type[adr] != mjWRAP_SITE ||
+        g_model->wrap_type[adr + 1] != mjWRAP_SITE) {
+        return 0;
+    }
+    out[0] = g_model->wrap_objid[adr];
+    out[1] = g_model->wrap_objid[adr + 1];
+    return 1;
+}
+
+/* Return tendon render width. */
+float mj_shim_tendon_width(int i) {
+    if (!g_model || i < 0 || i >= g_model->ntendon) return 0.0f;
+    return (float)g_model->tendon_width[i];
+}
+
+/* Resolve tendon RGBA, with a neutral fallback. */
+void mj_shim_tendon_rgba(int i, float *out) {
+    if (!out) return;
+    out[0] = 0.75f;
+    out[1] = 0.82f;
+    out[2] = 0.92f;
+    out[3] = 1.0f;
+    if (!g_model || i < 0 || i >= g_model->ntendon) return;
+    const float *rgba = g_model->tendon_rgba + i * 4;
+    out[0] = rgba[0];
+    out[1] = rgba[1];
+    out[2] = rgba[2];
+    out[3] = rgba[3];
 }
 
 /* Free model and data. */

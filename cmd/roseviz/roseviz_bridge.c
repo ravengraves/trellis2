@@ -1,3 +1,6 @@
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include "ros3.h"
 
 #include <stdint.h>
@@ -351,6 +354,10 @@ int roseviz_bridge_init(void) {
 
 	g_node = rose_init(1, argv, program_name, NULL, NULL);
 	return g_node != NULL;
+}
+
+rose_node *roseviz_bridge_node(void) {
+	return g_node;
 }
 
 void roseviz_bridge_shutdown(void) {

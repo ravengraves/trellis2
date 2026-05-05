@@ -1,0 +1,130 @@
+// test_radiation.pka — Verify stochastic radiation-channel noise pass.
+
+use fb;
+
+type RadiationStats = struct {
+	high_pixels: i32,
+	red_hits: i32,
+	green_hits: i32,
+	blue_hits: i32,
+	multi_hits: i32,
+};
+
+fn radiation_collect(rgb: []u8, pixels: i32) RadiationStats = {
+	let high_pixels: i32 = 0;
+	let red_hits: i32 = 0;
+	let green_hits: i32 = 0;
+	let blue_hits: i32 = 0;
+	let multi_hits: i32 = 0;
+	for (let i: i32 = 0; i < pixels; i += 1) {
+		let idx: size = (i * 3): size;
+		let r = (rgb[idx]: i32) > 150;
+		let g = (rgb[idx + 1z]: i32) > 150;
+		let b = (rgb[idx + 2z]: i32) > 150;
+		let count: i32 = 0;
+		if (r) { count = count + 1; };
+		if (g) { count = count + 1; };
+		if (b) { count = count + 1; };
+		if (count > 0) { high_pixels = high_pixels + 1; };
+		if (count > 1) { multi_hits = multi_hits + 1; };
+		if (r) { red_hits = red_hits + 1; };
+		if (g) { green_hits = green_hits + 1; };
+		if (b) { blue_hits = blue_hits + 1; };
+	};
+	return RadiationStats {
+		high_pixels = high_pixels,
+		red_hits = red_hits,
+		green_hits = green_hits,
+		blue_hits = blue_hits,
+		multi_hits = multi_hits,
+	};
+};
+
+fn radiation_copy(dst: []u8, src: []u8, byte_len: i32) void = {
+	for (let i: i32 = 0; i < byte_len; i += 1) {
+		dst[i: size] = src[i: size];
+	};
+};
+
+fn radiation_diff_count(a: []u8, b: []u8, byte_len: i32) i32 = {
+	let diff: i32 = 0;
+	for (let i: i32 = 0; i < byte_len; i += 1) {
+		if (a[i: size] != b[i: size]) { diff = diff + 1; };
+	};
+	return diff;
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_radiation ===");
+
+	let w: i32 = 64;
+	let h: i32 = 64;
+	let pixels = w * h;
+	let byte_count = pixels * 3;
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, w, h);
+	assert(e2_runtime_start(&rt), "engine start");
+	assert(e2_init_radiation_shader(), "radiation shader init");
+
+	let black: [12288]u8 = [0...];
+	let tex = e2_gpu_texture_create_rgb(black[0z..12288z], w, h);
+	assert(tex.valid, "black source texture valid");
+
+	let params = e2_radiation_params_default();
+	params.density = 0.23;
+	params.min_value = 0.72;
+	params.max_value = 1.0;
+	params.seed = 100.0;
+
+	e2_pass_begin(&rt, color_black());
+	e2_pass_radiation(&rt, &tex, &params);
+	e2_pass_end(&rt);
+
+	let first: [12288]u8 = [0...];
+	radiation_copy(first[0z..12288z], rt.fb.pixels[0z..12288z], byte_count);
+	let s1 = radiation_collect(first[0z..12288z], pixels);
+	assert(s1.high_pixels > 700, "radiation density creates enough bright pixels");
+	assert(s1.high_pixels < 1200, "radiation density does not overfill image");
+	assert(s1.red_hits > 150, "radiation affects red channel");
+	assert(s1.green_hits > 150, "radiation affects green channel");
+	assert(s1.blue_hits > 150, "radiation affects blue channel");
+	assert(s1.multi_hits == 0, "radiation only elevates one channel per hit");
+
+	params.seed = 101.0;
+	e2_pass_begin(&rt, color_black());
+	e2_pass_radiation(&rt, &tex, &params);
+	e2_pass_end(&rt);
+	let second: [12288]u8 = [0...];
+	radiation_copy(second[0z..12288z], rt.fb.pixels[0z..12288z], byte_count);
+	let s2 = radiation_collect(second[0z..12288z], pixels);
+	let diff = radiation_diff_count(first[0z..12288z], second[0z..12288z], byte_count);
+	assert(diff > 900, "radiation seed changes the noise pattern");
+
+	params.density = 0.0;
+	params.seed = 102.0;
+	e2_pass_begin(&rt, color_black());
+	e2_pass_radiation(&rt, &tex, &params);
+	e2_pass_end(&rt);
+	let zero = radiation_collect(rt.fb.pixels[0z..12288z], pixels);
+	assert(zero.high_pixels == 0, "zero density leaves image unchanged");
+
+	let tbuf: [256]u8 = [0...];
+	let tf = fb::New(tbuf[0z..256z]);
+	fb::Write(&tf, "  seed100 hits=");
+	fb::Wi64(&tf, s1.high_pixels: i64);
+	fb::Write(&tf, " rgb=(");
+	fb::Wi64(&tf, s1.red_hits: i64);
+	fb::Write(&tf, ",");
+	fb::Wi64(&tf, s1.green_hits: i64);
+	fb::Write(&tf, ",");
+	fb::Wi64(&tf, s1.blue_hits: i64);
+	fb::Write(&tf, ") seed101 hits=");
+	fb::Wi64(&tf, s2.high_pixels: i64);
+	fb::Write(&tf, " diff_bytes=");
+	fb::Wi64(&tf, diff: i64);
+	fb::Println(&tf);
+
+	e2_gpu_texture_destroy(&tex);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_radiation passed ===");
+};

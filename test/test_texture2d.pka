@@ -6,10 +6,11 @@
 //   4. Depth visualization mode produces grayscale output
 
 use fb;
-use fmt;
+use fb;
+use strings;
 
 export fn main() void = {
-	fmt::Printsln("=== test_texture2d ===");
+	fb::Printsln("=== test_texture2d ===");
 
 	// --- Setup: load model, init headless engine, create scene ---
 	let path: [20]u8 = ['m', 'o', 'd', 'e', 'l', 's', '/', 'b', 'a', 'l', 'l', '.', 'x', 'm', 'l', 0, 0, 0, 0, 0];
@@ -31,7 +32,7 @@ export fn main() void = {
 	let env = env_default();
 
 	let tbuf: [256]u8 = [0...];
-	let tf = fmt::New(tbuf[0z..256z]);
+	let tf = fb::New(tbuf[0z..256z]);
 
 	// ========== Test 1: Create texture from synthetic pattern ==========
 	// Red/blue checkerboard 8x8
@@ -55,7 +56,14 @@ export fn main() void = {
 	assert(tex.valid, "texture created");
 	assert(tex.width == 8, "tex width");
 	assert(tex.height == 8, "tex height");
-	fmt::Printsln("  test_texture_create: OK");
+	fb::Printsln("  test_texture_create: OK");
+
+	let png_path = strings::toutf8("../trellis/vendor/mujoco/model/cube/assets/blue.png");
+	let png_tex = e2_gpu_texture_load_png_rgb(png_path.data);
+	assert(png_tex.valid, "png texture loaded");
+	assert(png_tex.width > 0, "png tex width");
+	assert(png_tex.height > 0, "png tex height");
+	fb::Printsln("  test_png_texture_load: OK");
 
 	// ========== Test 2: Draw texture to framebuffer, verify pixels ==========
 	// Render a 3D scene first, then overlay the texture
@@ -87,16 +95,16 @@ export fn main() void = {
 		};
 	};
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  overlay: red=");
-	fmt::Wi64(&tf, overlay_r: i64);
-	fmt::Write(&tf, " blue=");
-	fmt::Wi64(&tf, overlay_b: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  overlay: red=");
+	fb::Wi64(&tf, overlay_r: i64);
+	fb::Write(&tf, " blue=");
+	fb::Wi64(&tf, overlay_b: i64);
+	fb::Println(&tf);
 
 	assert(overlay_r > 50, "overlay has red pixels");
 	assert(overlay_b > 50, "overlay has blue pixels");
-	fmt::Printsln("  test_texture_draw: OK");
+	fb::Printsln("  test_texture_draw: OK");
 
 	// ========== Test 3: Update texture with new data ==========
 	// Fill with solid green
@@ -121,19 +129,58 @@ export fn main() void = {
 			if (gv > 100) { green_count = green_count + 1; };
 		};
 	};
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  update green=");
-	fmt::Wi64(&tf, green_count: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  update green=");
+	fb::Wi64(&tf, green_count: i64);
+	fb::Println(&tf);
 
 	assert(green_count > 100, "updated texture has green pixels");
-	fmt::Printsln("  test_texture_update: OK");
+	fb::Printsln("  test_texture_update: OK");
+
+	// ========== Test 4: Tiled texture draw ==========
+	// Vertical red/blue halves; tiling should put both colors in each half
+	// of the destination rect.
+	let stripes: [192]u8 = [0...];
+	for (let sy: i32 = 0; sy < 8; sy += 1) {
+		for (let sx: i32 = 0; sx < 8; sx += 1) {
+			let si: size = ((sy * 8 + sx) * 3): size;
+			if (sx < 4) {
+				stripes[si] = 255u8;
+				stripes[si + 1z] = 0u8;
+				stripes[si + 2z] = 0u8;
+			} else {
+				stripes[si] = 0u8;
+				stripes[si + 1z] = 0u8;
+				stripes[si + 2z] = 255u8;
+			};
+		};
+	};
+	e2_gpu_texture_update_rgb(&tex, stripes[0z..192z]);
+	e2_pass_begin(&rt, color_new(0.0, 0.0, 0.0, 1.0));
+	e2_pass_2d_texture_tiled(&rt, &tex, 0, 0, 64, 16, 4.0, 1.0);
+	e2_pass_end(&rt);
+
+	let blue_left: i32 = 0;
+	let red_right: i32 = 0;
+	for (let ty: i32 = 2; ty < 14; ty += 1) {
+		for (let tx: i32 = 0; tx < 64; tx += 1) {
+			let ti: size = ((ty * 128 + tx) * 3): size;
+			let tr: i32 = rt.fb.pixels[ti]: i32;
+			let tb: i32 = rt.fb.pixels[ti + 2z]: i32;
+			if (tx < 32 && tb > 80) { blue_left = blue_left + 1; };
+			if (tx >= 32 && tr > 80) { red_right = red_right + 1; };
+		};
+	};
+	assert(blue_left > 40, "tiled texture repeats blue into left half");
+	assert(red_right > 40, "tiled texture repeats red into right half");
+	fb::Printsln("  test_texture_tiled: OK");
 
 	// Cleanup texture
 	e2_gpu_texture_destroy(&tex);
+	e2_gpu_texture_destroy(&png_tex);
 	assert(!tex.valid, "texture destroyed");
 
-	// ========== Test 4: CameraView RGB mode ==========
+	// ========== Test 5: CameraView RGB mode ==========
 	let cv_rgb = camera_view_new(
 		vec3_new(0.0, -3.0, 2.0),
 		vec3_new(0.0, 0.0, 1.0),
@@ -169,15 +216,15 @@ export fn main() void = {
 		};
 	};
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  camera_view rgb nonblack=");
-	fmt::Wi64(&tf, cv_nonblack: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  camera_view rgb nonblack=");
+	fb::Wi64(&tf, cv_nonblack: i64);
+	fb::Println(&tf);
 
 	assert(cv_nonblack > 50, "camera view shows rendered scene");
-	fmt::Printsln("  test_camera_view_rgb: OK");
+	fb::Printsln("  test_camera_view_rgb: OK");
 
-	// ========== Test 5: CameraView depth mode ==========
+	// ========== Test 6: CameraView depth mode ==========
 	let cv_depth = camera_view_new(
 		vec3_new(0.0, -3.0, 2.0),
 		vec3_new(0.0, 0.0, 1.0),
@@ -206,13 +253,13 @@ export fn main() void = {
 		if (dr > 5) { depth_bright = depth_bright + 1; };
 	};
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  camera_view depth bright=");
-	fmt::Wi64(&tf, depth_bright: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  camera_view depth bright=");
+	fb::Wi64(&tf, depth_bright: i64);
+	fb::Println(&tf);
 
 	assert(depth_bright > 20, "depth view has bright pixels");
-	fmt::Printsln("  test_camera_view_depth: OK");
+	fb::Printsln("  test_camera_view_depth: OK");
 
 	// --- Cleanup ---
 	camera_view_destroy(&cv_rgb);
@@ -220,5 +267,5 @@ export fn main() void = {
 	scene_destroy(&sc);
 	mj_shim_free();
 	e2_runtime_shutdown(&rt);
-	fmt::Printsln("=== test_texture2d passed ===");
+	fb::Printsln("=== test_texture2d passed ===");
 };

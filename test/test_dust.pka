@@ -1,0 +1,198 @@
+// test_dust.pka — Verify depth-based dust post-process fades far pixels.
+
+use fb;
+
+type DustStats = struct {
+	count: i32,
+	r: f32,
+	g: f32,
+	b: f32,
+};
+
+fn dust_box_model(x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32) Mat4 = {
+	let t = mat4_translate(x, y, z);
+	let s = mat4_scale(sx, sy, sz);
+	return mat4_mul(&t, &s);
+};
+
+fn dust_source_object_pixel(rgb: []u8, idx: size) bool = {
+	let r = rgb[idx]: i32;
+	let g = rgb[idx + 1z]: i32;
+	let b = rgb[idx + 2z]: i32;
+	return g > 80 && r < 80 && b < 80;
+};
+
+fn dust_depth_range(rgb: []u8, depth: []f32, pixels: i32,
+	out_min: *f32, out_max: *f32, out_count: *i32) void = {
+	let min_d: f32 = 100000.0;
+	let max_d: f32 = 0.0;
+	let count: i32 = 0;
+	for (let i: i32 = 0; i < pixels; i += 1) {
+		let ri: size = (i * 3): size;
+		if (!dust_source_object_pixel(rgb, ri)) { continue; };
+		let d = depth[i: size];
+		if (d < min_d) { min_d = d; };
+		if (d > max_d) { max_d = d; };
+		count = count + 1;
+	};
+	*out_min = min_d;
+	*out_max = max_d;
+	*out_count = count;
+};
+
+fn dust_collect(rgb_src: []u8, rgb_dust: []u8, depth: []f32,
+	pixels: i32, split: f32, far_side: bool) DustStats = {
+	let sum_r: i32 = 0;
+	let sum_g: i32 = 0;
+	let sum_b: i32 = 0;
+	let count: i32 = 0;
+	for (let i: i32 = 0; i < pixels; i += 1) {
+		let ri: size = (i * 3): size;
+		if (!dust_source_object_pixel(rgb_src, ri)) { continue; };
+		let d = depth[i: size];
+		if (far_side) {
+			if (d <= split) { continue; };
+		} else {
+			if (d > split) { continue; };
+		};
+		sum_r = sum_r + (rgb_dust[ri]: i32);
+		sum_g = sum_g + (rgb_dust[ri + 1z]: i32);
+		sum_b = sum_b + (rgb_dust[ri + 2z]: i32);
+		count = count + 1;
+	};
+	if (count <= 0) {
+		return DustStats { count = 0, r = 0.0, g = 0.0, b = 0.0 };
+	};
+	let denom = count: f32;
+	return DustStats {
+		count = count,
+		r = (sum_r: f32) / denom,
+		g = (sum_g: f32) / denom,
+		b = (sum_b: f32) / denom,
+	};
+};
+
+fn dust_color_dist2(stats: DustStats, dust: Color) f32 = {
+	let dr = stats.r - (dust.r * 255.0);
+	let dg = stats.g - (dust.g * 255.0);
+	let db = stats.b - (dust.b * 255.0);
+	return dr * dr + dg * dg + db * db;
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_dust ===");
+
+	let w: i32 = 128;
+	let h: i32 = 96;
+	let pixels = w * h;
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, w, h);
+	assert(e2_runtime_start(&rt), "engine start");
+	assert(e2_init_dust_shader(), "dust shader init");
+
+	let box = mesh_create_box();
+	let gpu_box = util_mesh_upload(&box);
+	assert(gpu_box.valid, "gpu box valid");
+
+	let geom = util_geom_pass_init();
+	let green = material_flat(color_new(0.0, 0.9, 0.0, 1.0));
+	let near_model = dust_box_model(-0.85, -2.0, 1.0, 0.75, 0.75, 0.75);
+	let far_model = dust_box_model(0.85, 2.2, 1.0, 1.05, 1.05, 1.05);
+	util_geom_pass_add(&geom, &gpu_box, near_model, green);
+	util_geom_pass_add(&geom, &gpu_box, far_model, green);
+
+	let cam = freecam_new(
+		vec3_new(0.0, -6.0, 1.1),
+		vec3_new(0.0, 0.2, 1.0),
+		45.0, 0.1, 14.0);
+	let lights = util_light_buffer_init();
+	let env = env_default();
+	let empty = util_color_pass_init();
+
+	let rgb: [36864]u8 = [0...];
+	let depth: [12288]f32 = [0.0...];
+	let ok = e2_render_camera_to_buffers_bg(
+		&cam, E2_GEOM_MODE_CONSTANT_COLOR,
+		geom.draws[0z..(geom.count: size)],
+		empty.draws[0z..0z],
+		empty.draws[0z..0z],
+		util_light_buffer_slice(&lights), &env,
+		color_black(),
+		rgb[0z..36864z],
+		depth[0z..12288z],
+		w, h);
+	assert(ok, "render color/depth buffers");
+
+	let min_d: f32 = 0.0;
+	let max_d: f32 = 0.0;
+	let object_count: i32 = 0;
+	dust_depth_range(rgb[0z..36864z], depth[0z..12288z],
+		pixels, &min_d, &max_d, &object_count);
+	assert(object_count > 200, "objects rendered into source buffers");
+	assert(max_d > min_d + 2.0, "objects have separated depths");
+
+	let color_tex = e2_gpu_texture_create_rgb(rgb[0z..36864z], w, h);
+	let depth_tex = e2_gpu_depth_texture_create(depth[0z..12288z],
+		w, h, cam.znear, cam.zfar);
+	assert(color_tex.valid, "color texture valid");
+	assert(depth_tex.valid, "depth texture valid");
+
+	let params = e2_dust_params_default(cam.znear, cam.zfar);
+	params.dust_color = color_new(0.80, 0.48, 0.22, 1.0);
+	params.start = min_d + (max_d - min_d) * 0.18;
+	params.end = min_d + (max_d - min_d) * 0.82;
+	params.falloff_distance = params.end - params.start;
+	params.density = 1.0;
+	params.noise_strength = 0.0;
+	params.noise_scale = 1.0;
+	params.blur_px = 0.0;
+
+	e2_pass_begin(&rt, color_black());
+	e2_pass_dust(&rt, &color_tex, &depth_tex, &params);
+	e2_pass_end(&rt);
+
+	let split = (min_d + max_d) * 0.5;
+	let near_stats = dust_collect(rgb[0z..36864z],
+		rt.fb.pixels[0z..36864z], depth[0z..12288z],
+		pixels, split, false);
+	let far_stats = dust_collect(rgb[0z..36864z],
+		rt.fb.pixels[0z..36864z], depth[0z..12288z],
+		pixels, split, true);
+	assert(near_stats.count > 50, "near object dust samples");
+	assert(far_stats.count > 50, "far object dust samples");
+
+	let tbuf: [256]u8 = [0...];
+	let tf = fb::New(tbuf[0z..256z]);
+	fb::Write(&tf, "  object depth min=");
+	fb::Wf64(&tf, min_d: f64, 3, "dec");
+	fb::Write(&tf, " max=");
+	fb::Wf64(&tf, max_d: f64, 3, "dec");
+	fb::Write(&tf, " near rgb=(");
+	fb::Wf64(&tf, near_stats.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, near_stats.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, near_stats.b: f64, 1, "dec");
+	fb::Write(&tf, ") far rgb=(");
+	fb::Wf64(&tf, far_stats.r: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, far_stats.g: f64, 1, "dec");
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, far_stats.b: f64, 1, "dec");
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
+
+	assert(far_stats.r > near_stats.r + 55.0,
+		"far object gains dust red more than near object");
+	assert(far_stats.b > near_stats.b + 15.0,
+		"far object gains dust blue more than near object");
+	let near_dust_dist2 = dust_color_dist2(near_stats, params.dust_color);
+	let far_dust_dist2 = dust_color_dist2(far_stats, params.dust_color);
+	assert(far_dust_dist2 < near_dust_dist2 * 0.35,
+		"far object is significantly closer to dust color");
+
+	e2_gpu_texture_destroy(&color_tex);
+	e2_gpu_texture_destroy(&depth_tex);
+	e2_gpu_mesh_destroy(&gpu_box);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_dust passed ===");
+};

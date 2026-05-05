@@ -1,7 +1,6 @@
 // robot_main.pka — Rover simulator with mounted RGB/depth camera.
 
 use args;
-use clock;
 use fb;
 use strings;
 
@@ -47,6 +46,86 @@ fn load_default_rover() bool = {
 	return false;
 };
 
+type RobotSimCli = struct {
+	model_path: str,
+	render_fps: i32,
+	physics_hz: i32,
+	valid: bool,
+	show_help: bool,
+};
+
+fn robot_sim_usage() void = {
+	fb::Printsln("usage: robot_sim [--terminal] [--half-cell] [--term-lines]");
+	fb::Printsln("                 [--render-fps FPS] [--physics-hz HZ] [model.xml]");
+	fb::Printsln("defaults: render-fps=30, physics-hz=1000");
+};
+
+fn robot_sim_is_flag(arg: str) bool = {
+	let data = strings::toutf8(arg);
+	return data.len >= 1z && data[0z] == ('-': u8);
+};
+
+fn robot_sim_parse_i32(arg: str) i32 = {
+	let data = strings::toutf8(arg);
+	if (data.len == 0z) { return 0; };
+	let out: i32 = 0;
+	for (let i: size = 0z; i < data.len; i += 1z) {
+		let ch = data[i];
+		if (ch < ('0': u8) || ch > ('9': u8)) {
+			return 0;
+		};
+		out = (out * 10) + ((ch - ('0': u8)): i32);
+	};
+	return out;
+};
+
+fn robot_sim_parse_cli() RobotSimCli = {
+	let cfg = RobotSimCli {
+		model_path = "",
+		render_fps = 30,
+		physics_hz = 1000,
+		valid = true,
+		show_help = false,
+	};
+	let argc = args::Count();
+	for (let i: i32 = 1; i < argc; i += 1) {
+		let arg = args::At(i);
+		if (arg == "--help") {
+			cfg.show_help = true;
+			return cfg;
+		};
+		if (arg == "--terminal" || arg == "--half-cell" ||
+			arg == "--term-lines" || arg == "--debug-ros-rate") {
+			continue;
+		};
+		if (arg == "--render-fps" || arg == "--fps" || arg == "--physics-hz") {
+			if (i + 1 >= argc) {
+				cfg.valid = false;
+				return cfg;
+			};
+			i = i + 1;
+			let value = robot_sim_parse_i32(args::At(i));
+			if (value <= 0) {
+				cfg.valid = false;
+				return cfg;
+			};
+			if (arg == "--physics-hz") {
+				cfg.physics_hz = value;
+			} else {
+				cfg.render_fps = value;
+			};
+			continue;
+		};
+		if (!robot_sim_is_flag(arg) && cfg.model_path == "") {
+			cfg.model_path = arg;
+			continue;
+		};
+		cfg.valid = false;
+		return cfg;
+	};
+	return cfg;
+};
+
 fn body_frame_from_snapshot(pos: []f32, rot: []f32) Mat4 = {
 	let m = mat4_identity();
 	m.d[0z] = rot[0z];
@@ -65,13 +144,133 @@ fn body_frame_from_snapshot(pos: []f32, rot: []f32) Mat4 = {
 	return m;
 };
 
+def ROBOT_STATIC_PBR_MAX: size = 2z;
+
+type StaticPbrObject = struct {
+	mesh: E2GpuMesh,
+	albedo: E2GpuTexture,
+	normal: E2GpuTexture,
+	orm: E2GpuTexture,
+	model: Mat4,
+	material: Material,
+	valid: bool,
+};
+
+type StaticPbrSet = struct {
+	objects: [ROBOT_STATIC_PBR_MAX]StaticPbrObject,
+};
+
+fn static_pbr_object_empty() StaticPbrObject = {
+	return StaticPbrObject {
+		mesh = E2GpuMesh { vbo = 0, ibo = 0, wire_ibo = 0,
+			index_count = 0, wire_index_count = 0, valid = false },
+		albedo = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false },
+		normal = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false },
+		orm = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false },
+		model = mat4_identity(),
+		material = material_pbr(color_white(), 1.0, 1.0),
+		valid = false,
+	};
+};
+
+fn static_pbr_model(tx: f32, ty: f32, tz: f32,
+	yaw_deg: f32, scale: f32) Mat4 = {
+	let t = mat4_translate(tx, ty, tz);
+	let r = mat4_rotate_z(yaw_deg);
+	let s = mat4_scale(scale, scale, scale);
+	let rs = mat4_mul(&r, &s);
+	return mat4_mul(&t, &rs);
+};
+
+fn static_pbr_load(obj_path: str, albedo_path: str,
+	normal_path: str, orm_path: str, model: Mat4) StaticPbrObject = {
+	let out = static_pbr_object_empty();
+	let obj_u8 = strings::toutf8(obj_path);
+	out.mesh = util_mesh_load_obj_upload(obj_u8.data);
+	if (!out.mesh.valid) {
+		return out;
+	};
+
+	let mat = material_pbr(color_white(), 1.0, 1.0);
+	let albedo_u8 = strings::toutf8(albedo_path);
+	out.albedo = e2_gpu_texture_load_png_rgba(albedo_u8.data);
+	if (out.albedo.valid) {
+		mat.texture = out.albedo.handle;
+	};
+
+	let normal_u8 = strings::toutf8(normal_path);
+	out.normal = e2_gpu_texture_load_png_rgb(normal_u8.data);
+	if (out.normal.valid) {
+		mat.normal_texture = out.normal.handle;
+	};
+
+	let orm_u8 = strings::toutf8(orm_path);
+	out.orm = e2_gpu_texture_load_png_rgb(orm_u8.data);
+	if (out.orm.valid) {
+		mat.orm_texture = out.orm.handle;
+	};
+
+	out.model = model;
+	out.material = mat;
+	out.valid = true;
+	return out;
+};
+
+fn static_pbr_set_empty() StaticPbrSet = {
+	return StaticPbrSet {
+		objects = [static_pbr_object_empty()...],
+	};
+};
+
+fn static_pbr_load_rover_scene() StaticPbrSet = {
+	let set = static_pbr_set_empty();
+	set.objects[0z] = static_pbr_load(
+		"assets/rover_scene/rock_a.obj",
+		"assets/rover_scene/rock_a_albedo.png",
+		"assets/rover_scene/rock_a_normal.png",
+		"assets/rover_scene/rock_a_orm.png",
+		static_pbr_model(1.8, 1.8, 0.18, -18.0, 0.75));
+	set.objects[1z] = static_pbr_load(
+		"assets/rover_scene/prop_b.obj",
+		"assets/rover_scene/prop_b_albedo.png",
+		"assets/rover_scene/prop_b_normal.png",
+		"assets/rover_scene/prop_b_orm.png",
+		static_pbr_model(-1.7, 2.6, 0.20, 34.0, 0.85));
+	return set;
+};
+
+fn static_pbr_add_to_pass(set: *StaticPbrSet, buf: *E2GeomPassBuffer) void = {
+	for (let i: size = 0z; i < ROBOT_STATIC_PBR_MAX; i += 1z) {
+		if (set.objects[i].valid && set.objects[i].mesh.valid) {
+			util_geom_pass_add(buf, &set.objects[i].mesh,
+				set.objects[i].model, set.objects[i].material);
+		};
+	};
+};
+
+fn static_pbr_destroy(set: *StaticPbrSet) void = {
+	for (let i: size = 0z; i < ROBOT_STATIC_PBR_MAX; i += 1z) {
+		if (set.objects[i].albedo.valid) { e2_gpu_texture_destroy(&set.objects[i].albedo); };
+		if (set.objects[i].normal.valid) { e2_gpu_texture_destroy(&set.objects[i].normal); };
+		if (set.objects[i].orm.valid) { e2_gpu_texture_destroy(&set.objects[i].orm); };
+		if (set.objects[i].mesh.valid) { e2_gpu_mesh_destroy(&set.objects[i].mesh); };
+		set.objects[i].valid = false;
+	};
+};
+
 export fn main() void = {
+	let cli = robot_sim_parse_cli();
+	if (cli.show_help || !cli.valid) {
+		robot_sim_usage();
+		return;
+	};
+
 	let mode = E2_MODE_WINDOW;
 	if (args::Has("--terminal")) {
 		mode = E2_MODE_TERMINAL;
 	};
 
-	let model_path = args::FirstPositional();
+	let model_path = cli.model_path;
 	let loaded = false;
 	if (model_path != "") {
 		loaded = try_load_model(model_path);
@@ -79,11 +278,16 @@ export fn main() void = {
 		loaded = load_default_rover();
 	};
 	if (!loaded) {
-		fb::Printsln("usage: robot_sim [--terminal] [model.xml]");
+		robot_sim_usage();
 		return;
 	};
 
-	let control_topic = strings::toutf8("/xbox/controller");
+	let requested_timestep = 1.0f64 / (cli.physics_hz: f64);
+	if (mj_shim_set_timestep(requested_timestep) != 0) {
+		fb::Printsln("warning: failed to set MuJoCo timestep");
+	};
+
+	let control_topic = strings::toutf8("/control");
 	let left_name = strings::toutf8("rear_right_wheel");
 	let right_name = strings::toutf8("rear_left_wheel");
 	if (mj_shim_configure_tank_controls(
@@ -101,7 +305,7 @@ export fn main() void = {
 	if (args::Has("--term-lines")) {
 		rt.term_present_mode = E2_TERM_PRESENT_LINES;
 	};
-	rt.target_fps = 60;
+	rt.target_fps = 0;
 	if (!e2_runtime_start(&rt)) {
 		fb::Printsln("engine start failed");
 		mj_shim_free();
@@ -113,6 +317,8 @@ export fn main() void = {
 
 	let rgb_topic = strings::toutf8("/simulator/rgb");
 	let depth_topic = strings::toutf8("/simulator/depth");
+	let imu_topic = strings::toutf8("/simulator/imu");
+	let vio_topic = strings::toutf8("/simulator/vio");
 	let render_node = strings::toutf8("simulator");
 	let sensor_w: i32 = 128;
 	let sensor_h: i32 = 96;
@@ -127,9 +333,20 @@ export fn main() void = {
 		64) != 0) {
 		fb::Printsln("warning: ROS3 render publishers unavailable");
 	};
+	if (mj_shim_ros_motion_init(
+		render_node.data,
+		imu_topic.data,
+		vio_topic.data,
+		1024,
+		1024,
+		cli.physics_hz,
+		30) != 0) {
+		fb::Printsln("warning: ROS3 motion publishers unavailable");
+	};
 
 	let sc = scene_new();
 	scene_init(&sc);
+	let static_objects = static_pbr_load_rover_scene();
 
 	let line_cpu = util_cpu_color_buffer_init();
 	util_lines_add_grid(&line_cpu, 8.0, 32, color_gray(0.20));
@@ -170,20 +387,21 @@ export fn main() void = {
 	let body_rot: [9]f32 = [0.0...];
 	let sim_time: f64 = 0.0;
 	let frame_ms: f64 = 0.0;
-	let sensor_pub_rate_hz: f64 = 30.0;
-	let sensor_pub_period_s: f64 = 1.0f64 / sensor_pub_rate_hz;
-	let sensor_pub_last_tick: u64 = mj_shim_ros_now();
-	// Run physics on the main thread at the MuJoCo timestep.
+	let render_fps = cli.render_fps;
+	let render_period_s: f64 = 1.0f64 / (render_fps: f64);
+	let sensor_pub_period_s = render_period_s;
+	let sensor_pub_last_tick: u64 = rose_now();
 	let physics_step_s: f64 = mj_shim_timestep();
 	if (physics_step_s <= 0.0) {
-		physics_step_s = 1.0f64 / 60.0f64;
+		physics_step_s = 1.0f64 / (cli.physics_hz: f64);
 	};
-	let physics_accum_s: f64 = 0.0;
-	let physics_last_ns: i64 = clock::TimeNS();
-	let max_physics_steps_per_frame: i32 = 8;
+	let sim_start_time = mj_shim_time();
+	let realtime_start_tick = rose_now();
+	let next_render_sim_time = sim_start_time;
 	let debug_ros_rate = args::Has("--debug-ros-rate");
-	let debug_last_ns: i64 = clock::TimeNS();
-	let debug_frame_count: i32 = 0;
+	let debug_last_tick: u64 = realtime_start_tick;
+	let debug_render_count: i32 = 0;
+	let debug_physics_steps: i32 = 0;
 	let debug_sensor_ok_count: i32 = 0;
 	let debug_publish_count: i32 = 0;
 	let debug_ok_ms: f64 = 0.0;
@@ -191,31 +409,51 @@ export fn main() void = {
 	let debug_sensor_ms: f64 = 0.0;
 	let debug_publish_ms: f64 = 0.0;
 
-		for (e2_runtime_should_run(&rt)) {
-			let t0_tick = clock::Now();
-			e2_runtime_begin_frame(&rt);
-			debug_frame_count = debug_frame_count + 1;
-			let ros_ok_tick = clock::Now();
-			if (mj_shim_ros_ok() == 0) {
-				break;
+	for (e2_runtime_should_run(&rt)) {
+		let ros_ok_tick = rose_now();
+		if (mj_shim_ros_ok() == 0) {
+			break;
+		};
+		debug_ok_ms = debug_ok_ms + rose_elapsed_seconds(ros_ok_tick) * 1000.0f64;
+
+		let ros_spin_tick = rose_now();
+		mj_shim_ros_spin_once();
+		debug_spin_ms = debug_spin_ms + rose_elapsed_seconds(ros_spin_tick) * 1000.0f64;
+
+		let wall_elapsed_s = rose_elapsed_seconds(realtime_start_tick);
+		let target_sim_time = sim_start_time + wall_elapsed_s;
+		let step_count: i32 = 0;
+		for (mj_shim_time() + (physics_step_s * 0.5f64) < target_sim_time) {
+			mj_shim_step();
+			step_count = step_count + 1;
+			debug_physics_steps = debug_physics_steps + 1;
+			if (step_count % 64 == 0) {
+				mj_shim_ros_spin_once();
 			};
-			debug_ok_ms = debug_ok_ms + clock::Elapsed(ros_ok_tick) * 1000.0f64;
-			let ros_spin_tick = clock::Now();
-			mj_shim_ros_spin_once();
-			debug_spin_ms = debug_spin_ms + clock::Elapsed(ros_spin_tick) * 1000.0f64;
-			let physics_now_ns = clock::TimeNS();
-			let physics_frame_s = ((physics_now_ns - physics_last_ns): f64) / 1000000000.0f64;
-			physics_last_ns = physics_now_ns;
-			physics_accum_s = physics_accum_s + physics_frame_s;
-			let max_physics_accum_s = physics_step_s * (max_physics_steps_per_frame: f64);
-			if (physics_accum_s > max_physics_accum_s) {
-				physics_accum_s = max_physics_accum_s;
+		};
+
+		sim_time = mj_shim_time();
+		if (sim_time + 0.000001f64 < next_render_sim_time) {
+			let next_step_sim_time = sim_time + physics_step_s;
+			let wake_sim_time = next_step_sim_time;
+			if (next_render_sim_time < wake_sim_time) {
+				wake_sim_time = next_render_sim_time;
 			};
-			for (let step_i: i32 = 0; step_i < max_physics_steps_per_frame && physics_accum_s >= physics_step_s; step_i += 1) {
-				mj_shim_step();
-				physics_accum_s = physics_accum_s - physics_step_s;
+			let wake_wall_s = wake_sim_time - sim_start_time;
+			let sleep_s = wake_wall_s - rose_elapsed_seconds(realtime_start_tick);
+			if (sleep_s > 0.0) {
+				rose_sleep(sleep_s);
 			};
-			camera_view_layout_top_right(&sensor_view, &rt, 16, 0.28, 0.32);
+			continue;
+		};
+		for (next_render_sim_time <= sim_time) {
+			next_render_sim_time = next_render_sim_time + render_period_s;
+		};
+
+		let t0_tick = rose_now();
+		e2_runtime_begin_frame(&rt);
+		debug_render_count = debug_render_count + 1;
+		camera_view_layout_top_right(&sensor_view, &rt, 16, 0.28, 0.32);
 
 		util_camera_apply_orbit_controls(&cam, &rt.input, rt.mode == E2_MODE_TERMINAL);
 		if (input_key_just_pressed(&rt.input, KEY_D)) {
@@ -242,61 +480,69 @@ export fn main() void = {
 		mj_shim_snapshot_end();
 
 		scene_geom_pass(&sc, &geom_pass);
+		static_pbr_add_to_pass(&static_objects, &geom_pass);
 
 		util_color_pass_clear(&line_pass);
 		util_color_pass_add(&line_pass, &line_gpu, 1.0);
 
-			let sensor_tick = clock::Now();
-			let sensor_ok = camera_view_render_bg(
-				&sensor_view,
-				geom_pass.draws[0z..(geom_pass.count: size)],
-				util_light_buffer_slice(&lights),
-				&env,
-				bg_color);
-			debug_sensor_ms = debug_sensor_ms + clock::Elapsed(sensor_tick) * 1000.0f64;
-			let sensor_ros_now = mj_shim_ros_now();
-			let sensor_pub_elapsed_s = mj_shim_ros_seconds(sensor_ros_now, sensor_pub_last_tick);
-			if (sensor_ok) {
-				debug_sensor_ok_count = debug_sensor_ok_count + 1;
+		let sensor_tick = rose_now();
+		let sensor_ok = camera_view_render_bg(
+			&sensor_view,
+			geom_pass.draws[0z..(geom_pass.count: size)],
+			util_light_buffer_slice(&lights),
+			&env,
+			bg_color);
+		debug_sensor_ms = debug_sensor_ms + rose_elapsed_seconds(sensor_tick) * 1000.0f64;
+		let sensor_ros_now = rose_now();
+		let sensor_pub_elapsed_s = rose_seconds(sensor_ros_now, sensor_pub_last_tick);
+		if (sensor_ok) {
+			debug_sensor_ok_count = debug_sensor_ok_count + 1;
+		};
+		if (sensor_ok && sensor_pub_elapsed_s >= sensor_pub_period_s) {
+			let publish_tick = rose_now();
+			if (publish_sensor_topics(&sensor_view)) {
+				sensor_pub_last_tick = sensor_ros_now;
+				debug_publish_count = debug_publish_count + 1;
 			};
-			if (sensor_ok && sensor_pub_elapsed_s >= sensor_pub_period_s) {
-				let publish_tick = clock::Now();
-				if (publish_sensor_topics(&sensor_view)) {
-					sensor_pub_last_tick = sensor_ros_now;
-					debug_publish_count = debug_publish_count + 1;
-				};
-				debug_publish_ms = debug_publish_ms + clock::Elapsed(publish_tick) * 1000.0f64;
-			};
-			let sensor_now_ns = clock::TimeNS();
-			if (debug_ros_rate && sensor_now_ns - debug_last_ns >= 1000000000i64) {
-				let dbuf: [160]u8 = [0...];
-				let dfmt = fb::New(dbuf[0z..160z]);
-				fb::Write(&dfmt, "robot_sim rate frames=");
-				fb::Wi64(&dfmt, debug_frame_count: i64);
-				fb::Write(&dfmt, " sensor_ok=");
-				fb::Wi64(&dfmt, debug_sensor_ok_count: i64);
-				fb::Write(&dfmt, " publishes=");
-				fb::Wi64(&dfmt, debug_publish_count: i64);
-				fb::Write(&dfmt, " rgb_index=");
-				fb::Wi64(&dfmt, mj_shim_ros_rgb_index(): i64);
-				fb::Write(&dfmt, " ok_ms=");
-				fb::Wf64(&dfmt, debug_ok_ms, 1, "fix");
-				fb::Write(&dfmt, " spin_ms=");
-				fb::Wf64(&dfmt, debug_spin_ms, 1, "fix");
-				fb::Write(&dfmt, " sensor_ms=");
-				fb::Wf64(&dfmt, debug_sensor_ms, 1, "fix");
-				fb::Write(&dfmt, " publish_ms=");
-				fb::Wf64(&dfmt, debug_publish_ms, 1, "fix");
-				fb::Printsln(fb::ToStr(&dfmt));
-				debug_last_ns = sensor_now_ns;
-				debug_frame_count = 0;
-				debug_sensor_ok_count = 0;
-				debug_publish_count = 0;
-				debug_ok_ms = 0.0;
-				debug_spin_ms = 0.0;
-				debug_sensor_ms = 0.0;
-				debug_publish_ms = 0.0;
-			};
+			debug_publish_ms = debug_publish_ms + rose_elapsed_seconds(publish_tick) * 1000.0f64;
+		};
+		let sensor_now_tick = rose_now();
+		if (debug_ros_rate && rose_seconds(sensor_now_tick, debug_last_tick) >= 1.0f64) {
+			let dbuf: [192]u8 = [0...];
+			let dfmt = fb::New(dbuf[0z..192z]);
+			fb::Write(&dfmt, "robot_sim rate renders=");
+			fb::Wi64(&dfmt, debug_render_count: i64);
+			fb::Write(&dfmt, " physics_steps=");
+			fb::Wi64(&dfmt, debug_physics_steps: i64);
+			fb::Write(&dfmt, " sensor_ok=");
+			fb::Wi64(&dfmt, debug_sensor_ok_count: i64);
+			fb::Write(&dfmt, " publishes=");
+			fb::Wi64(&dfmt, debug_publish_count: i64);
+			fb::Write(&dfmt, " rgb_index=");
+			fb::Wi64(&dfmt, mj_shim_ros_rgb_index(): i64);
+			fb::Write(&dfmt, " imu_index=");
+			fb::Wi64(&dfmt, mj_shim_ros_imu_index(): i64);
+			fb::Write(&dfmt, " vio_index=");
+			fb::Wi64(&dfmt, mj_shim_ros_vio_index(): i64);
+			fb::Write(&dfmt, " ok_ms=");
+			fb::Wf64(&dfmt, debug_ok_ms, 1, "fix");
+			fb::Write(&dfmt, " spin_ms=");
+			fb::Wf64(&dfmt, debug_spin_ms, 1, "fix");
+			fb::Write(&dfmt, " sensor_ms=");
+			fb::Wf64(&dfmt, debug_sensor_ms, 1, "fix");
+			fb::Write(&dfmt, " publish_ms=");
+			fb::Wf64(&dfmt, debug_publish_ms, 1, "fix");
+			fb::Printsln(fb::ToStr(&dfmt));
+			debug_last_tick = sensor_now_tick;
+			debug_render_count = 0;
+			debug_physics_steps = 0;
+			debug_sensor_ok_count = 0;
+			debug_publish_count = 0;
+			debug_ok_ms = 0.0;
+			debug_spin_ms = 0.0;
+			debug_sensor_ms = 0.0;
+			debug_publish_ms = 0.0;
+		};
 
 		e2_pass_begin(&rt, bg_color);
 		let free_cam = util_camera_free_from_orbit(&cam);
@@ -323,16 +569,17 @@ export fn main() void = {
 		e2_text_add(&rt, 0.01, 0.05, fb::ToStr(&tfmt), 255, 255, 255);
 		e2_pass_text(&rt);
 
-		let pre_present_ms = clock::Elapsed(t0_tick) * 1000.0f64;
+		let pre_present_ms = rose_elapsed_seconds(t0_tick) * 1000.0f64;
 		e2_runtime_present(&rt);
 		if (rt.mode == E2_MODE_TERMINAL) {
 			frame_ms = pre_present_ms + rt.last_term_draw_ms;
 		} else {
-			frame_ms = clock::Elapsed(t0_tick) * 1000.0f64;
+			frame_ms = rose_elapsed_seconds(t0_tick) * 1000.0f64;
 		};
 	};
 
 	camera_view_destroy(&sensor_view);
+	static_pbr_destroy(&static_objects);
 	scene_destroy(&sc);
 	e2_gpu_color_destroy(&line_gpu);
 	mj_shim_free();

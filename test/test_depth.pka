@@ -1,10 +1,10 @@
 // test_depth.pka — Depth sensor tests for MuJoCo scene rendering.
 
 use fb;
-use fmt;
+use fb;
 
 export fn main() void = {
-	fmt::Printsln("=== test_depth ===");
+	fb::Printsln("=== test_depth ===");
 
 	// --- Setup ---
 	let path: [20]u8 = ['m', 'o', 'd', 'e', 'l', 's', '/', 'b', 'a', 'l', 'l', '.', 'x', 'm', 'l', 0, 0, 0, 0, 0];
@@ -25,12 +25,12 @@ export fn main() void = {
 	let env = env_default();
 
 	let tbuf: [256]u8 = [0...];
-	let tf = fmt::New(tbuf[0z..256z]);
+	let tf = fb::New(tbuf[0z..256z]);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  geom draws: ");
-	fmt::Wi64(&tf, geom_pass.count: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  geom draws: ");
+	fb::Wi64(&tf, geom_pass.count: i64);
+	fb::Println(&tf);
 
 	// --- Direct call to e2_render_camera_to_buffers (bypass DepthSensor) ---
 	// Camera close to ball at (0, 0, 2), world radius 0.1
@@ -59,25 +59,25 @@ export fn main() void = {
 	let cy: i32 = 24;
 	let center_d = out_depth[(cy * 64 + cx): size];
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  center(32,24) depth: ");
-	fmt::Wf64(&tf, center_d: f64, 4);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  center(32,24) depth: ");
+	fb::Wf64(&tf, center_d: f64, 4);
+	fb::Println(&tf);
 
 	// Print depth at 5x5 grid around center
 	for (let dy: i32 = -2; dy <= 2; dy += 1) {
-		fmt::Clear(&tf);
-		fmt::Write(&tf, "  row ");
-		fmt::Wi64(&tf, (cy + dy): i64);
-		fmt::Write(&tf, ": ");
+		fb::Clear(&tf);
+		fb::Write(&tf, "  row ");
+		fb::Wi64(&tf, (cy + dy): i64);
+		fb::Write(&tf, ": ");
 		for (let dx: i32 = -6; dx <= 6; dx += 3) {
 			let px = cx + dx;
 			let py = cy + dy;
 			let d = out_depth[(py * 64 + px): size];
-			fmt::Wf64(&tf, d: f64, 2);
-			fmt::Write(&tf, " ");
+			fb::Wf64(&tf, d: f64, 2);
+			fb::Write(&tf, " ");
 		};
-		fmt::Println(&tf);
+		fb::Println(&tf);
 	};
 
 	// Count non-zero and near depth pixels
@@ -96,14 +96,14 @@ export fn main() void = {
 		if (dv > 0.001 && dv < min_d) { min_d = dv; };
 	};
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  nonzero: ");
-	fmt::Wi64(&tf, nonzero: i64);
-	fmt::Write(&tf, " near(<5): ");
-	fmt::Wi64(&tf, near5: i64);
-	fmt::Write(&tf, " min: ");
-	fmt::Wf64(&tf, min_d: f64, 4);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  nonzero: ");
+	fb::Wi64(&tf, nonzero: i64);
+	fb::Write(&tf, " near(<5): ");
+	fb::Wi64(&tf, near5: i64);
+	fb::Write(&tf, " min: ");
+	fb::Wf64(&tf, min_d: f64, 4);
+	fb::Println(&tf);
 
 	// Count non-black RGB pixels (verify something was rendered)
 	let rgb_nonblack: i32 = 0;
@@ -113,10 +113,10 @@ export fn main() void = {
 			rgb_nonblack = rgb_nonblack + 1;
 		};
 	};
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  rgb non-black: ");
-	fmt::Wi64(&tf, rgb_nonblack: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  rgb non-black: ");
+	fb::Wi64(&tf, rgb_nonblack: i64);
+	fb::Println(&tf);
 
 	// --- Assertions ---
 	assert(nonzero > 0, "some depth pixels rendered");
@@ -125,7 +125,7 @@ export fn main() void = {
 	// --- Test ball depth: center should see ball (depth ~1.4) ---
 	// Ball world radius = 0.5 * 0.2 = 0.1, camera dist 1.5, surface at 1.4
 	assert(center_d > 0.1, "center depth above znear");
-	fmt::Printsln("  depth rendering works: OK");
+	fb::Printsln("  depth rendering works: OK");
 
 	let alt_lights = util_light_buffer_init();
 	util_light_buffer_clear(&alt_lights);
@@ -155,10 +155,10 @@ export fn main() void = {
 			max_depth_delta = adelta;
 		};
 	};
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  max depth delta under lighting change: ");
-	fmt::Wf64(&tf, max_depth_delta: f64, 6, "dec");
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  max depth delta under lighting change: ");
+	fb::Wf64(&tf, max_depth_delta: f64, 6, "dec");
+	fb::Println(&tf);
 	assert(max_depth_delta < 0.001,
 		"depth rendering stays independent of lighting and environment");
 
@@ -177,12 +177,12 @@ export fn main() void = {
 	let sensor_center = depth_sensor_center_depth(&sensor);
 	let sensor_valid = depth_sensor_count_valid(&sensor);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  sensor center: ");
-	fmt::Wf64(&tf, sensor_center: f64, 4);
-	fmt::Write(&tf, " valid: ");
-	fmt::Wi64(&tf, sensor_valid: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  sensor center: ");
+	fb::Wf64(&tf, sensor_center: f64, 4);
+	fb::Write(&tf, " valid: ");
+	fb::Wi64(&tf, sensor_valid: i64);
+	fb::Println(&tf);
 
 	// --- Test physics: ball falls and depth changes ---
 	for (let s1: i32 = 0; s1 < 500; s1 += 1) {
@@ -196,15 +196,15 @@ export fn main() void = {
 	assert(ok3, "post-physics render ok");
 
 	let post_center = depth_sensor_center_depth(&sensor);
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  post-fall center: ");
-	fmt::Wf64(&tf, post_center: f64, 4);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  post-fall center: ");
+	fb::Wf64(&tf, post_center: f64, 4);
+	fb::Println(&tf);
 
 	let delta = post_center - sensor_center;
 	if (delta < 0.0) { delta = 0.0 - delta; };
 	assert(delta > 0.05, "depth changed after physics");
-	fmt::Printsln("  test_depth_changes_with_physics: OK");
+	fb::Printsln("  test_depth_changes_with_physics: OK");
 
 	// --- Ground sensor ---
 	let ground_sensor = depth_sensor_new(
@@ -219,20 +219,20 @@ export fn main() void = {
 
 	let ground_center = depth_sensor_center_depth(&ground_sensor);
 	let ground_valid = depth_sensor_count_valid(&ground_sensor);
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  ground center: ");
-	fmt::Wf64(&tf, ground_center: f64, 3);
-	fmt::Write(&tf, " valid: ");
-	fmt::Wi64(&tf, ground_valid: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  ground center: ");
+	fb::Wf64(&tf, ground_center: f64, 3);
+	fb::Write(&tf, " valid: ");
+	fb::Wi64(&tf, ground_valid: i64);
+	fb::Println(&tf);
 
 	assert(ground_valid > 50, "ground has depth coverage");
 	assert(ground_center > 0.5, "ground depth plausible");
-	fmt::Printsln("  test_ground_depth: OK");
+	fb::Printsln("  test_ground_depth: OK");
 
 	// --- Cleanup ---
 	scene_destroy(&sc);
 	mj_shim_free();
 	e2_runtime_shutdown(&rt);
-	fmt::Printsln("=== test_depth passed ===");
+	fb::Printsln("=== test_depth passed ===");
 };

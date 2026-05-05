@@ -9,6 +9,9 @@ fn mj_shim_stop_threaded() void;
 export @symbol("mj_shim_threaded_active")
 fn mj_shim_threaded_active() i32;
 
+export @symbol("mj_shim_set_timestep")
+fn mj_shim_set_timestep(timestep: f64) i32;
+
 export @symbol("mj_shim_configure_tank_controls")
 fn mj_shim_configure_tank_controls(
 	topic: *u8,
@@ -25,6 +28,22 @@ fn mj_shim_ros_render_init(
 	depth_message_bytes: i32,
 	hz: i32) i32;
 
+export @symbol("mj_shim_ros_motion_init")
+fn mj_shim_ros_motion_init(
+	node_name: *u8,
+	imu_topic: *u8,
+	vio_topic: *u8,
+	imu_message_bytes: i32,
+	vio_message_bytes: i32,
+	imu_hz: i32,
+	vio_hz: i32) i32;
+
+export @symbol("mj_shim_motion_source_status")
+fn mj_shim_motion_source_status() i32;
+
+export @symbol("mj_shim_motion_sample")
+fn mj_shim_motion_sample(imu_out: *f64, vio_out: *f64) i32;
+
 export @symbol("mj_shim_ros_spin_once")
 fn mj_shim_ros_spin_once() void;
 
@@ -39,6 +58,24 @@ fn mj_shim_ros_seconds(stop: u64, start: u64) f64;
 
 export @symbol("mj_shim_ros_rgb_index")
 fn mj_shim_ros_rgb_index() u64;
+
+export @symbol("mj_shim_ros_imu_index")
+fn mj_shim_ros_imu_index() u64;
+
+export @symbol("mj_shim_ros_vio_index")
+fn mj_shim_ros_vio_index() u64;
+
+export @symbol("rose_now")
+fn rose_now() u64;
+
+export @symbol("rose_seconds")
+fn rose_seconds(stop: u64, start: u64) f64;
+
+export @symbol("rose_elapsed_seconds")
+fn rose_elapsed_seconds(start: u64) f64;
+
+export @symbol("rose_sleep")
+fn rose_sleep(seconds: f64) void;
 
 export @symbol("mj_shim_ros_render_publish_rgb")
 fn mj_shim_ros_render_publish_rgb(

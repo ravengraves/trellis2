@@ -3,7 +3,6 @@
 
 use args;
 use fb;
-use fmt;
 use clock;
 use strings;
 
@@ -17,24 +16,24 @@ export fn main() void = {
 	// Get model path from CLI
 	let model_path = args::FirstPositional();
 	if (model_path == "") {
-		fmt::Printsln("usage: trellis2 [--terminal] model.xml");
+		fb::Printsln("usage: trellis2 [--terminal] model.xml");
 		return;
 	};
 
 	// Load MuJoCo model
 	let model_path_u8 = strings::toutf8(model_path);
 	if (mj_shim_load(model_path_u8.data) != 0) {
-		fmt::Printsln("failed to load model");
+		fb::Printsln("failed to load model");
 		return;
 	};
 
 	let ngeom = mj_shim_ngeom();
 	let tbuf: [128]u8 = [0...];
-	let tfmt = fmt::New(tbuf[0z..128z]);
-	fmt::Write(&tfmt, "loaded model: ");
-	fmt::Wi64(&tfmt, ngeom: i64);
-	fmt::Write(&tfmt, " geoms");
-	fmt::Println(&tfmt);
+	let tfmt = fb::New(tbuf[0z..128z]);
+	fb::Write(&tfmt, "loaded model: ");
+	fb::Wi64(&tfmt, ngeom: i64);
+	fb::Write(&tfmt, " geoms");
+	fb::Println(&tfmt);
 
 	// Init engine
 	let rt = e2_runtime_init(mode, 800, 600);
@@ -46,7 +45,7 @@ export fn main() void = {
 	};
 	rt.target_fps = 30;
 	if (!e2_runtime_start(&rt)) {
-		fmt::Printsln("engine start failed");
+		fb::Printsln("engine start failed");
 		mj_shim_free();
 		return;
 	};
@@ -110,13 +109,13 @@ export fn main() void = {
 		util_text_add_fps(&rt, frame_ms, 0.01, 0.01);
 		e2_pass_text(&rt);
 
-		let pre_present_ms = clock::Since(t0_tick) * 1000.0f64;
+		let pre_present_ms = clock::Elapsed(t0_tick) * 1000.0f64;
 		e2_runtime_present(&rt);
 
 		if (rt.mode == E2_MODE_TERMINAL) {
 			frame_ms = pre_present_ms + rt.last_term_draw_ms;
 		} else {
-			frame_ms = clock::Since(t0_tick) * 1000.0f64;
+			frame_ms = clock::Elapsed(t0_tick) * 1000.0f64;
 		};
 	};
 

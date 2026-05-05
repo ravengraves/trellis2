@@ -19,7 +19,7 @@ use strings;
 	slot: i32, out_xyz: *f32, max_points: i32) i32;
 @symbol("roseviz_bridge_decode_slot_transforms") fn roseviz_bridge_decode_slot_transforms(
 	slot: i32, out_tf: *f32, max_edges: i32) i32;
-@symbol("roseviz_bridge_publish_command") fn roseviz_bridge_publish_command(topic: *u8, cmd: *u8) i32;
+@symbol("roseviz_bridge_node") fn roseviz_bridge_node() RoseNode;
 
 def ROSEVIZ_TAB_COUNT: i32 = 11;
 def ROSEVIZ_TAB_ALL: i32 = 10;
@@ -170,6 +170,7 @@ export type RosevizApp = struct {
 	sim_running: bool,
 	sim_cmd_topic_len: i32,
 	sim_cmd_topic: [ROSEVIZ_TOPIC_NAME_BYTES]u8,
+	sim_cmd_pub: RosePublisher,
 	workspaces: [ROSEVIZ_TAB_COUNT_Z]RosevizWorkspace,
 	cache_image_w: [ROSEVIZ_MAX_TILES_Z]i32,
 	cache_image_h: [ROSEVIZ_MAX_TILES_Z]i32,
@@ -257,6 +258,7 @@ export fn roseviz_app_zero() RosevizApp = {
 		sim_running = false,
 		sim_cmd_topic_len = 0,
 		sim_cmd_topic = [0...],
+		sim_cmd_pub = 0: uintptr: RosePublisher,
 		workspaces = [roseviz_empty_workspace()...],
 		cache_image_w = [0...],
 		cache_image_h = [0...],
@@ -402,6 +404,37 @@ fn roseviz_topic_equals(a: []u8, a_len: i32, b: []u8, b_len: i32) bool = {
 		if (a[i: size] != b[i: size]) { return false; };
 	};
 	return true;
+};
+
+fn roseviz_publish_command(app: *RosevizApp, topic: str, cmd: str) i32 = {
+	let null_node = 0: uintptr: RoseNode;
+	let null_pub = 0: uintptr: RosePublisher;
+	let null_msg = 0: uintptr: MirageMsg;
+	let null_alloc = 0: uintptr: RoseAllocator;
+	let null_dealloc = 0: uintptr: RoseDeallocator;
+	let node = roseviz_bridge_node();
+	if (node == null_node) {
+		return -1;
+	};
+	if (app.sim_cmd_pub == null_pub) {
+		app.sim_cmd_pub = rosepka_create_pub(node, topic, 256u64, 64u64);
+		if (app.sim_cmd_pub == null_pub) {
+			return -1;
+		};
+	};
+
+	let msg = mirage_create(256, null_alloc);
+	if (msg == null_msg) {
+		return -1;
+	};
+	let rc = 1;
+	if (mirage_write_start(msg) < 0 ||
+		miragepka_write_fn(msg, cmd, 0) < 0 ||
+		rose_publish(app.sim_cmd_pub, msg: RoseMsg) < 0) {
+		rc = -1;
+	};
+	mirage_destroy(&msg, null_dealloc);
+	return rc;
 };
 
 fn roseviz_key_press_nomod(rt: *E2Runtime, key: i32) bool = {
@@ -760,31 +793,30 @@ fn roseviz_bind_default_topics(app: *RosevizApp) void = {
 
 fn roseviz_sim_send_pause_play(app: *RosevizApp) void = {
 	if (!app.sim_active || app.sim_cmd_topic_len <= 0) { return; };
-	let pause_cmd: [6]u8 = ['p', 'a', 'u', 's', 'e', 0];
-	let play_cmd: [5]u8 = ['p', 'l', 'a', 'y', 0];
+	let topic = strings::fromutf8_unsafe(app.sim_cmd_topic[0z..(app.sim_cmd_topic_len: size)]);
 	if (app.sim_running) {
-		if (roseviz_bridge_publish_command(&app.sim_cmd_topic[0z], &pause_cmd[0z]) > 0) {
+		if (roseviz_publish_command(app, topic, "pause") > 0) {
 			app.sim_running = false;
 		};
 	} else {
-		if (roseviz_bridge_publish_command(&app.sim_cmd_topic[0z], &play_cmd[0z]) > 0) {
+		if (roseviz_publish_command(app, topic, "play") > 0) {
 			app.sim_running = true;
 		};
 	};
 };
 
 fn roseviz_sim_send_reset(app: *RosevizApp) void = {
-	let reset_cmd: [6]u8 = ['r', 'e', 's', 'e', 't', 0];
 	if (!app.sim_active || app.sim_cmd_topic_len <= 0) { return; };
-	if (roseviz_bridge_publish_command(&app.sim_cmd_topic[0z], &reset_cmd[0z]) > 0) {
+	let topic = strings::fromutf8_unsafe(app.sim_cmd_topic[0z..(app.sim_cmd_topic_len: size)]);
+	if (roseviz_publish_command(app, topic, "reset") > 0) {
 		app.sim_running = true;
 	};
 };
 
 fn roseviz_sim_send_step(app: *RosevizApp) void = {
-	let step_cmd: [5]u8 = ['s', 't', 'e', 'p', 0];
 	if (!app.sim_active || app.sim_cmd_topic_len <= 0) { return; };
-	if (roseviz_bridge_publish_command(&app.sim_cmd_topic[0z], &step_cmd[0z]) > 0) {
+	let topic = strings::fromutf8_unsafe(app.sim_cmd_topic[0z..(app.sim_cmd_topic_len: size)]);
+	if (roseviz_publish_command(app, topic, "step") > 0) {
 		app.sim_running = false;
 	};
 };
@@ -798,6 +830,7 @@ export fn roseviz_use_falling_ball_preset(app: *RosevizApp) void = {
 	app.sim_active = true;
 	app.sim_running = true;
 	app.sim_cmd_topic_len = roseviz_copy_topic(app.sim_cmd_topic[0z..ROSEVIZ_TOPIC_NAME_BYTES], cmd_topic[0z..22z], 21);
+	app.sim_cmd_pub = 0: uintptr: RosePublisher;
 
 	ws.tiles[0z] = roseviz_empty_tile();
 	ws.tiles[0z].kind = ROSEVIZ_TILE_POINTS;
@@ -1413,6 +1446,7 @@ export fn roseviz_app_init(app: *RosevizApp) bool = {
 	app.sim_running = false;
 	app.sim_cmd_topic_len = 0;
 	app.sim_cmd_topic[0z] = 0u8;
+	app.sim_cmd_pub = 0: uintptr: RosePublisher;
 	for (let i: i32 = 0; i < ROSEVIZ_TAB_COUNT; i += 1) {
 		let ws = &app.workspaces[i: size];
 		ws.root = 0;

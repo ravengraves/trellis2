@@ -20,6 +20,7 @@
 #define SNAPSHOT_COUNT 2
 #define CONTROL_TIMEOUT_S 0.5
 #define CONTROL_MSG_BYTES 1024
+#define CONTROL_SUB_RETRY_NS 250000000ULL
 
 typedef struct {
     float *geom_pos;
@@ -42,7 +43,7 @@ static pthread_t g_physics_thread;
 static int g_physics_thread_running = 0;
 static int g_physics_stop = 0;
 
-static char g_control_topic[CTRL_TOPIC_CAP] = "/xbox/controller";
+static char g_control_topic[CTRL_TOPIC_CAP] = "/control";
 static char g_left_actuator_name[CTRL_NAME_CAP] = "";
 static char g_right_actuator_name[CTRL_NAME_CAP] = "";
 static int g_left_actuator = -1;
@@ -57,12 +58,31 @@ static rose_node *g_ros_node = NULL;
 static rose_subscriber *g_control_sub = NULL;
 static rose_publisher *g_rgb_pub = NULL;
 static rose_publisher *g_depth_pub = NULL;
+static rose_publisher *g_imu_pub = NULL;
+static rose_publisher *g_vio_pub = NULL;
 static mirage_msg *g_rgb_msg = NULL;
 static mirage_msg *g_depth_msg = NULL;
+static mirage_msg *g_imu_msg = NULL;
+static mirage_msg *g_vio_msg = NULL;
+static u64 g_control_sub_last_retry_ns = 0;
+static int g_control_sub_failures = 0;
 static int g_rgb_publish_failures = 0;
 static int g_depth_publish_failures = 0;
+static int g_imu_publish_failures = 0;
+static int g_vio_publish_failures = 0;
+static int g_frame_body = -1;
+static int g_imu_gyro_sensor = -1;
+static int g_imu_accel_sensor = -1;
+static int g_imu_gyro_adr = -1;
+static int g_imu_accel_adr = -1;
+static double g_imu_period_s = 0.001;
+static double g_vio_period_s = 1.0 / 30.0;
+static double g_next_imu_pub_time = 0.0;
+static double g_next_vio_pub_time = 0.0;
 
 void mj_shim_stop_threaded(void);
+void mj_shim_ros_motion_publish_due(void);
+static int ensure_control_subscriber(u64 now_ns, int force);
 
 static void snapshot_free(mj_snapshot *snap) {
     if(!snap) {
@@ -113,6 +133,10 @@ static void shutdown_ros_io(void) {
     g_control_sub = NULL;
     g_rgb_pub = NULL;
     g_depth_pub = NULL;
+    g_imu_pub = NULL;
+    g_vio_pub = NULL;
+    g_control_sub_last_retry_ns = 0;
+    g_control_sub_failures = 0;
     if(g_rgb_msg) {
         mirage_destroy(&g_rgb_msg, NULL);
         g_rgb_msg = NULL;
@@ -121,10 +145,33 @@ static void shutdown_ros_io(void) {
         mirage_destroy(&g_depth_msg, NULL);
         g_depth_msg = NULL;
     }
+    if(g_imu_msg) {
+        mirage_destroy(&g_imu_msg, NULL);
+        g_imu_msg = NULL;
+    }
+    if(g_vio_msg) {
+        mirage_destroy(&g_vio_msg, NULL);
+        g_vio_msg = NULL;
+    }
     if(g_ros_node) {
         rose_shutdown(g_ros_node);
         g_ros_node = NULL;
     }
+}
+
+static void shutdown_motion_io(void) {
+    g_imu_pub = NULL;
+    g_vio_pub = NULL;
+    if(g_imu_msg) {
+        mirage_destroy(&g_imu_msg, NULL);
+        g_imu_msg = NULL;
+    }
+    if(g_vio_msg) {
+        mirage_destroy(&g_vio_msg, NULL);
+        g_vio_msg = NULL;
+    }
+    g_imu_publish_failures = 0;
+    g_vio_publish_failures = 0;
 }
 
 static void copy_arg_string(char *dst, size_t dst_size, const unsigned char *src, const char *fallback) {
@@ -154,6 +201,59 @@ static void resolve_actuator_ids(void) {
     g_right_actuator = g_right_actuator_name[0]
         ? mj_name2id(g_model, mjOBJ_ACTUATOR, g_right_actuator_name)
         : -1;
+}
+
+static int ensure_ros_node(unsigned char *node_name) {
+    char node_name_buf[CTRL_NAME_CAP];
+
+    if(g_ros_node) {
+        return 0;
+    }
+
+    copy_arg_string(node_name_buf, sizeof(node_name_buf), node_name, "simulator");
+    g_ros_node = rose_init(0, NULL, node_name_buf, NULL, NULL);
+    if(!g_ros_node) {
+        return -1;
+    }
+    (void) ensure_control_subscriber(rose_now(), 1);
+    return 0;
+}
+
+static void resolve_motion_sources(void) {
+    g_frame_body = -1;
+    g_imu_gyro_sensor = -1;
+    g_imu_accel_sensor = -1;
+    g_imu_gyro_adr = -1;
+    g_imu_accel_adr = -1;
+
+    if(!g_model) {
+        return;
+    }
+
+    g_frame_body = mj_name2id(g_model, mjOBJ_BODY, "frame");
+    g_imu_gyro_sensor = mj_name2id(g_model, mjOBJ_SENSOR, "imu_gyro");
+    if(g_imu_gyro_sensor >= 0
+       && g_model->sensor_dim[g_imu_gyro_sensor] == 3
+       && g_model->sensor_adr[g_imu_gyro_sensor] >= 0) {
+        g_imu_gyro_adr = g_model->sensor_adr[g_imu_gyro_sensor];
+    } else {
+        g_imu_gyro_sensor = -1;
+    }
+
+    g_imu_accel_sensor = mj_name2id(g_model, mjOBJ_SENSOR, "imu_accel");
+    if(g_imu_accel_sensor >= 0
+       && g_model->sensor_dim[g_imu_accel_sensor] == 3
+       && g_model->sensor_adr[g_imu_accel_sensor] >= 0) {
+        g_imu_accel_adr = g_model->sensor_adr[g_imu_accel_sensor];
+    } else {
+        g_imu_accel_sensor = -1;
+    }
+}
+
+static void reset_motion_schedule(void) {
+    double now = g_data ? g_data->time : 0.0;
+    g_next_imu_pub_time = now + g_imu_period_s;
+    g_next_vio_pub_time = now + g_vio_period_s;
 }
 
 static const mj_snapshot *active_snapshot(void) {
@@ -250,20 +350,28 @@ static void step_simulation_once(void) {
 
     apply_controls(left, right);
     mj_step(g_model, g_data);
+    mj_shim_ros_motion_publish_due();
 
     back_slot = 1 - __atomic_load_n(&g_front_snapshot, __ATOMIC_RELAXED);
     capture_snapshot(back_slot);
+}
+
+static float clamp_unit_f64(double value) {
+    if(value < 0.0) {
+        return 0.0f;
+    }
+    if(value > 1.0) {
+        return 1.0f;
+    }
+    return (float) value;
 }
 
 static int decode_control_message(mirage_msg *msg, float *out_left, float *out_right) {
     char fn_name[32];
     i64 fn_len = 0;
     i64 argc = 0;
-    double axis_lx = 0.0;
-    double axis_ly = 0.0;
-    double trig_l = -1.0;
-    double axis_rx = 0.0;
-    double axis_ry = 0.0;
+    double left = 0.0;
+    double right = 0.0;
 
     if(!out_left || !out_right) {
         return 0;
@@ -277,24 +385,15 @@ static int decode_control_message(mirage_msg *msg, float *out_left, float *out_r
     if(mirage_read_fn(msg, fn_name, &fn_len, (i64) sizeof(fn_name) - 1, &argc) < 0) {
         return 0;
     }
-    if(argc < 5) {
+    if(argc < 2) {
         return 0;
     }
-    if(mirage_read_f64(msg, &axis_lx) < 0
-       || mirage_read_f64(msg, &axis_ly) < 0
-       || mirage_read_f64(msg, &trig_l) < 0
-       || mirage_read_f64(msg, &axis_rx) < 0) {
+    if(mirage_read_f64(msg, &left) < 0
+       || mirage_read_f64(msg, &right) < 0) {
         return 0;
     }
-    axis_ry = axis_rx;
-    (void) trig_l;
-    if(argc >= 5) {
-        if(mirage_read_f64(msg, &axis_ry) < 0) {
-            axis_ry = axis_rx;
-        }
-    }
-    *out_left = (float) mju_clip(-axis_ly, -1.0, 1.0);
-    *out_right = (float) mju_clip(-axis_ry, -1.0, 1.0);
+    *out_left = clamp_unit_f64(left);
+    *out_right = clamp_unit_f64(right);
     return 1;
 }
 
@@ -309,6 +408,44 @@ static void control_callback(mirage_msg *msg) {
     g_last_right = right;
     g_last_control_ns = rose_now();
     pthread_mutex_unlock(&g_control_lock);
+}
+
+static int ensure_control_subscriber(u64 now_ns, int force) {
+    i64 err_code;
+
+    if(!g_ros_node || g_control_sub) {
+        return g_control_sub ? 0 : -1;
+    }
+    if(!force && g_control_sub_last_retry_ns != 0
+       && now_ns - g_control_sub_last_retry_ns < CONTROL_SUB_RETRY_NS) {
+        return -1;
+    }
+
+    g_control_sub_last_retry_ns = now_ns;
+    g_control_sub = rose_create_sub(g_ros_node, g_control_topic, -1, 1, control_callback);
+    if(g_control_sub) {
+        if(g_control_sub_failures > 0) {
+            fprintf(stderr, "robot_sim: control subscriber connected to %s\n", g_control_topic);
+        }
+        g_control_sub_failures = 0;
+        return 0;
+    }
+
+    if(g_control_sub_failures == 0) {
+        err_code = rose_last_error_code();
+        if(err_code == -2) {
+            fprintf(stderr,
+                    "robot_sim: control subscriber pending for %s; publisher not available yet, retrying\n",
+                    g_control_topic);
+        } else {
+            fprintf(stderr,
+                    "robot_sim: control subscriber pending for %s; create failed with code %lld, retrying\n",
+                    g_control_topic,
+                    (long long) err_code);
+        }
+    }
+    g_control_sub_failures += 1;
+    return -1;
 }
 
 static void *physics_thread_main(void *unused) {
@@ -348,6 +485,11 @@ static void free_model_data(void) {
     g_snapshot_index = 0;
     g_left_actuator = -1;
     g_right_actuator = -1;
+    g_frame_body = -1;
+    g_imu_gyro_sensor = -1;
+    g_imu_accel_sensor = -1;
+    g_imu_gyro_adr = -1;
+    g_imu_accel_adr = -1;
     g_last_left = 0.0f;
     g_last_right = 0.0f;
     g_last_control_ns = 0;
@@ -380,6 +522,8 @@ int mj_shim_load(unsigned char *path) {
     }
     mj_forward(g_model, g_data);
     resolve_actuator_ids();
+    resolve_motion_sources();
+    reset_motion_schedule();
     capture_snapshot(0);
     return 0;
 }
@@ -476,6 +620,14 @@ void mj_shim_geom_rgba(int i, float *out) {
 
 double mj_shim_timestep(void) {
     return g_model ? g_model->opt.timestep : 0.002;
+}
+
+int mj_shim_set_timestep(double timestep) {
+    if(!g_model || timestep <= 0.0) {
+        return -1;
+    }
+    g_model->opt.timestep = (mjtNum) timestep;
+    return 0;
 }
 
 float mj_shim_stat_extent(void) {
@@ -629,7 +781,7 @@ int mj_shim_configure_tank_controls(
     unsigned char *left_actuator,
     unsigned char *right_actuator,
     float max_cmd) {
-    copy_arg_string(g_control_topic, sizeof(g_control_topic), topic, "/xbox/controller");
+    copy_arg_string(g_control_topic, sizeof(g_control_topic), topic, "/control");
     copy_arg_string(g_left_actuator_name, sizeof(g_left_actuator_name), left_actuator, "");
     copy_arg_string(g_right_actuator_name, sizeof(g_right_actuator_name), right_actuator, "");
     g_max_cmd = max_cmd > 0.0f ? max_cmd : 0.3f;
@@ -638,6 +790,181 @@ int mj_shim_configure_tank_controls(
         return 0;
     }
     return (g_left_actuator >= 0 && g_right_actuator >= 0) ? 0 : -1;
+}
+
+int mj_shim_motion_source_status(void) {
+    int status = 0;
+    if(g_frame_body >= 0) {
+        status |= 1;
+    }
+    if(g_imu_gyro_adr >= 0) {
+        status |= 2;
+    }
+    if(g_imu_accel_adr >= 0) {
+        status |= 4;
+    }
+    return status;
+}
+
+int mj_shim_motion_sample(double *imu_out, double *vio_out) {
+    mjtNum vel[6];
+    mjtNum acc[6];
+    int i;
+
+    if(!g_model || !g_data) {
+        return -1;
+    }
+    if(g_frame_body < 0 || g_frame_body >= g_model->nbody) {
+        resolve_motion_sources();
+    }
+    if(g_frame_body < 0 || g_frame_body >= g_model->nbody) {
+        return -1;
+    }
+
+    if(imu_out) {
+        imu_out[0] = (double) g_data->time;
+        if(g_imu_gyro_adr >= 0 && g_imu_gyro_adr + 2 < g_model->nsensordata) {
+            for(i = 0; i < 3; ++i) {
+                imu_out[1 + i] = (double) g_data->sensordata[g_imu_gyro_adr + i];
+            }
+        } else {
+            mj_objectVelocity(g_model, g_data, mjOBJ_XBODY, g_frame_body, vel, 1);
+            for(i = 0; i < 3; ++i) {
+                imu_out[1 + i] = (double) vel[i];
+            }
+        }
+
+        if(g_imu_accel_adr >= 0 && g_imu_accel_adr + 2 < g_model->nsensordata) {
+            for(i = 0; i < 3; ++i) {
+                imu_out[4 + i] = (double) g_data->sensordata[g_imu_accel_adr + i];
+            }
+        } else {
+            mj_objectAcceleration(g_model, g_data, mjOBJ_XBODY, g_frame_body, acc, 1);
+            for(i = 0; i < 3; ++i) {
+                imu_out[4 + i] = (double) acc[3 + i];
+            }
+        }
+    }
+
+    if(vio_out) {
+        mj_objectVelocity(g_model, g_data, mjOBJ_XBODY, g_frame_body, vel, 0);
+        vio_out[0] = (double) g_data->time;
+        for(i = 0; i < 3; ++i) {
+            vio_out[1 + i] = (double) g_data->xpos[g_frame_body * 3 + i];
+            vio_out[4 + i] = (double) vel[3 + i];
+        }
+    }
+
+    return 0;
+}
+
+static int publish_f64_array(
+    rose_publisher *pub,
+    mirage_msg *msg,
+    const double *data,
+    i64 count,
+    const char *label,
+    int *failures) {
+    i64 dims[1];
+    int64_t rc;
+
+    if(!pub || !msg || !data || count <= 0) {
+        return -1;
+    }
+
+    dims[0] = count;
+    rc = mirage_write_start(msg);
+    if(rc < 0) {
+        return -1;
+    }
+    rc = mirage_write_numericarray(msg, MIRAGE_ARRAY_F64, 1, dims, (void *) data);
+    if(rc < 0) {
+        return -1;
+    }
+    if(rose_publish(pub, msg) < 0) {
+        if(failures && *failures < 8) {
+            fprintf(stderr, "robot_sim: %s publish failed: %s\n", label, rose_last_error());
+        }
+        if(failures) {
+            *failures += 1;
+        }
+        return -1;
+    }
+    if(failures) {
+        *failures = 0;
+    }
+    return 0;
+}
+
+void mj_shim_ros_motion_publish_due(void) {
+    double now;
+    double imu[7];
+    double vio[7];
+
+    if(!g_model || !g_data) {
+        return;
+    }
+    now = (double) g_data->time;
+
+    if(g_imu_pub && g_imu_msg && g_imu_period_s > 0.0
+       && now + 1e-12 >= g_next_imu_pub_time) {
+        if(mj_shim_motion_sample(imu, NULL) == 0) {
+            (void) publish_f64_array(
+                g_imu_pub, g_imu_msg, imu, 7, "IMU", &g_imu_publish_failures);
+        }
+        do {
+            g_next_imu_pub_time += g_imu_period_s;
+        } while(now + 1e-12 >= g_next_imu_pub_time);
+    }
+
+    if(g_vio_pub && g_vio_msg && g_vio_period_s > 0.0
+       && now + 1e-12 >= g_next_vio_pub_time) {
+        if(mj_shim_motion_sample(NULL, vio) == 0) {
+            (void) publish_f64_array(
+                g_vio_pub, g_vio_msg, vio, 7, "VIO", &g_vio_publish_failures);
+        }
+        do {
+            g_next_vio_pub_time += g_vio_period_s;
+        } while(now + 1e-12 >= g_next_vio_pub_time);
+    }
+}
+
+int mj_shim_ros_motion_init(
+    unsigned char *node_name,
+    unsigned char *imu_topic,
+    unsigned char *vio_topic,
+    int imu_message_bytes,
+    int vio_message_bytes,
+    int imu_hz,
+    int vio_hz) {
+    char imu_topic_buf[CTRL_TOPIC_CAP];
+    char vio_topic_buf[CTRL_TOPIC_CAP];
+    int imu_bytes = imu_message_bytes > 0 ? imu_message_bytes : 1024;
+    int vio_bytes = vio_message_bytes > 0 ? vio_message_bytes : 1024;
+    int imu_rate_hz = imu_hz > 0 ? imu_hz : 1000;
+    int vio_rate_hz = vio_hz > 0 ? vio_hz : 30;
+
+    shutdown_motion_io();
+    if(ensure_ros_node(node_name) != 0) {
+        return -1;
+    }
+
+    copy_arg_string(imu_topic_buf, sizeof(imu_topic_buf), imu_topic, "/simulator/imu");
+    copy_arg_string(vio_topic_buf, sizeof(vio_topic_buf), vio_topic, "/simulator/vio");
+    g_imu_period_s = 1.0 / (double) imu_rate_hz;
+    g_vio_period_s = 1.0 / (double) vio_rate_hz;
+    resolve_motion_sources();
+    reset_motion_schedule();
+
+    g_imu_pub = rose_create_pub(g_ros_node, imu_topic_buf, -1, (u64) imu_bytes, (u64) imu_rate_hz);
+    g_vio_pub = rose_create_pub(g_ros_node, vio_topic_buf, -1, (u64) vio_bytes, (u64) vio_rate_hz);
+    g_imu_msg = mirage_create(imu_bytes, NULL);
+    g_vio_msg = mirage_create(vio_bytes, NULL);
+    if(!g_imu_pub || !g_vio_pub || !g_imu_msg || !g_vio_msg) {
+        shutdown_motion_io();
+        return -1;
+    }
+    return 0;
 }
 
 int mj_shim_ros_render_init(
@@ -665,7 +992,7 @@ int mj_shim_ros_render_init(
         return -1;
     }
 
-    g_control_sub = rose_create_sub(g_ros_node, g_control_topic, -1, 1, control_callback);
+    (void) ensure_control_subscriber(rose_now(), 1);
     g_rgb_pub = rose_create_pub(g_ros_node, rgb_topic_buf, -1, (u64) rgb_bytes, (u64) rate_hz);
     g_depth_pub = rose_create_pub(g_ros_node, depth_topic_buf, -1, (u64) depth_bytes, (u64) rate_hz);
     g_rgb_msg = mirage_create(rgb_bytes, NULL);
@@ -679,7 +1006,7 @@ int mj_shim_ros_render_init(
     g_rgb_publish_failures = 0;
     g_depth_publish_failures = 0;
 
-    if(!g_control_sub || !g_rgb_pub || !g_depth_pub || !g_rgb_msg || !g_depth_msg) {
+    if(!g_rgb_pub || !g_depth_pub || !g_rgb_msg || !g_depth_msg) {
         shutdown_ros_io();
         return -1;
     }
@@ -688,6 +1015,9 @@ int mj_shim_ros_render_init(
 
 void mj_shim_ros_spin_once(void) {
     if(g_ros_node) {
+        if(!g_control_sub) {
+            (void) ensure_control_subscriber(rose_now(), 0);
+        }
         rose_spin_once(g_ros_node);
     }
 }
@@ -712,6 +1042,20 @@ u64 mj_shim_ros_rgb_index(void) {
         return 0;
     }
     return (u64) g_rgb_pub->pub->buffer->index;
+}
+
+u64 mj_shim_ros_imu_index(void) {
+    if(!g_imu_pub || !g_imu_pub->pub || !g_imu_pub->pub->buffer) {
+        return 0;
+    }
+    return (u64) g_imu_pub->pub->buffer->index;
+}
+
+u64 mj_shim_ros_vio_index(void) {
+    if(!g_vio_pub || !g_vio_pub->pub || !g_vio_pub->pub->buffer) {
+        return 0;
+    }
+    return (u64) g_vio_pub->pub->buffer->index;
 }
 
 int mj_shim_ros_render_publish_rgb(unsigned char *rgb, int width, int height, int channels) {

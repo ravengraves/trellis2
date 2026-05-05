@@ -1,0 +1,181 @@
+// rose_api.pka — Pika-friendly wrappers for the ROS3/Rose C API.
+// Opaque pointer aliases are used for C structs and callbacks that Pika does
+// not need to inspect directly. String-taking wrappers accept Pika `str` and
+// forward byte pointers/lengths to the C implementation.
+
+use strings;
+
+export type RoseNode = *opaque;
+export type RosePublisher = *opaque;
+export type RoseSubscriber = *opaque;
+export type RoseMsg = *opaque;
+export type RoseCallback = *opaque;
+export type RoseAllocator = *opaque;
+export type RoseDeallocator = *opaque;
+
+export type MirageMsg = *opaque;
+
+export def ROSE_OK: i64 = 0;
+export def ROSE_NO_DATA: i64 = -1;
+export def ROSE_ERR_BADDATA: i64 = -2;
+export def ROSE_ERR_BUFFERSIZE: i64 = -4;
+export def ROSE_ERR_BADINPUT: i64 = -8;
+
+export @symbol("rose_last_error") fn rose_last_error() *u8;
+export @symbol("rose_last_error_code") fn rose_last_error_code() i64;
+
+@symbol("rose_init") fn rose_c_init(argc: i8, argv: **u8, name: *u8,
+	alloc: RoseAllocator, deallocator: RoseDeallocator) RoseNode;
+@symbol("rose_create_node") fn rose_c_create_node(name: *u8, name_length: i64,
+	prefix: *u8, prefix_len: i64,
+	remaps: *u8, remap_string_lengths: *u64, remap_count: u64,
+	alloc: RoseAllocator, deallocator: RoseDeallocator) RoseNode;
+export @symbol("rose_shutdown") fn rose_shutdown(n: RoseNode) void;
+export @symbol("rose_ok") fn rose_ok(n: RoseNode) i64;
+
+@symbol("rose_create_pub") fn rose_c_create_pub(n: RoseNode,
+	name: *u8, name_length: i64, message_length: u64, message_hz: u64) RosePublisher;
+@symbol("rose_create_sub") fn rose_c_create_sub(n: RoseNode,
+	name: *u8, name_length: i64, latest_only: u64, callback: RoseCallback) RoseSubscriber;
+export @symbol("rose_delete_subscriber") fn rose_delete_subscriber(n: RoseNode,
+	s: RoseSubscriber) void;
+export @symbol("rose_publish") fn rose_publish(p: RosePublisher, msg: RoseMsg) i64;
+export @symbol("rose_read") fn rose_read(s: RoseSubscriber, msg: RoseMsg) i64;
+export @symbol("rose_readlast") fn rose_readlast(s: RoseSubscriber, msg: RoseMsg) i64;
+export @symbol("rose_remaining") fn rose_remaining(s: RoseSubscriber) u64;
+export @symbol("rose_spin_once") fn rose_spin_once(n: RoseNode) void;
+export @symbol("rose_spin_forever") fn rose_spin_forever(n: RoseNode) void;
+
+@symbol("rose_get_param") fn rose_c_get_param(n: RoseNode,
+	param_name: *u8, param_name_length: i64, param: RoseMsg) i64;
+@symbol("rose_set_param") fn rose_c_set_param(n: RoseNode,
+	param_name: *u8, param_name_length: i64, param: RoseMsg) i64;
+
+@symbol("rose_log") fn rose_c_log(node: RoseNode, level: i32,
+	message: *u8, message_length: i64) void;
+@symbol("rose_info") fn rose_c_info(message: *u8, message_length: i64) void;
+@symbol("rose_warn") fn rose_c_warn(message: *u8, message_length: i64) void;
+@symbol("rose_error") fn rose_c_error(message: *u8, message_length: i64) void;
+@symbol("rose_fatal") fn rose_c_fatal(message: *u8, message_length: i64) void;
+
+export @symbol("rose_now") fn rose_now() u64;
+export @symbol("rose_timer_calibrate_seconds") fn rose_timer_calibrate_seconds(seconds: f64) void;
+export @symbol("rose_seconds") fn rose_seconds(stop: u64, start: u64) f64;
+export @symbol("rose_nanoseconds") fn rose_nanoseconds(stop: u64, start: u64) f64;
+export @symbol("rose_elapsed_seconds") fn rose_elapsed_seconds(start: u64) f64;
+export @symbol("rose_elapsed_nanoseconds") fn rose_elapsed_nanoseconds(start: u64) f64;
+export @symbol("rose_sleep") fn rose_sleep(seconds: f64) void;
+export @symbol("rose_nanosleep") fn rose_nanosleep(nanoseconds: f64) void;
+export @symbol("rose_sleep_rate") fn rose_sleep_rate(hz: f64) void;
+@symbol("rose_topic_to_shm") fn rose_c_topic_to_shm(
+	shm: *u8, shm_size: size, topic: *u8) *u8;
+export @symbol("rose_set_pdeathsig") fn rose_set_pdeathsig(sig: i32) i32;
+
+// Mirage helpers used by Pika-side Rose publishers.
+export @symbol("mirage_create") fn mirage_create(buffer_size: i64,
+	alloc: RoseAllocator) MirageMsg;
+export @symbol("mirage_destroy") fn mirage_destroy(msg: *MirageMsg,
+	dealloc: RoseDeallocator) void;
+export @symbol("mirage_write_start") fn mirage_write_start(msg: MirageMsg) i64;
+@symbol("mirage_write_fn") fn mirage_c_write_fn(msg: MirageMsg,
+	name: *u8, name_length: i64, argc: i64) i64;
+
+fn rose_copy_cstr(dst: []u8, s: str) *u8 = {
+	let bytes = strings::toutf8(s);
+	if (dst.len == 0z) { return 0: uintptr: *u8; };
+	let n = bytes.len;
+	if (n >= dst.len) {
+		n = dst.len - 1z;
+	};
+	for (let i: size = 0z; i < n; i += 1z) {
+		dst[i] = bytes[i];
+	};
+	dst[n] = 0u8;
+	return dst.data;
+};
+
+export fn rosepka_init(argc: i8, argv: **u8, name: str,
+	alloc: RoseAllocator, deallocator: RoseDeallocator) RoseNode = {
+	let name_buf: [256]u8 = [0...];
+	return rose_c_init(argc, argv,
+		rose_copy_cstr(name_buf[0z..256z], name), alloc, deallocator);
+};
+
+export fn rosepka_create_node(name: str, prefix: str,
+	remaps: []u8, remap_string_lengths: []u64,
+	alloc: RoseAllocator, deallocator: RoseDeallocator) RoseNode = {
+	let name_bytes = strings::toutf8(name);
+	let prefix_bytes = strings::toutf8(prefix);
+	let remap_data = remaps.data;
+	let remap_lens = remap_string_lengths.data;
+	if (remaps.len == 0z) {
+		remap_data = 0: uintptr: *u8;
+	};
+	if (remap_string_lengths.len == 0z) {
+		remap_lens = 0: uintptr: *u64;
+	};
+	return rose_c_create_node(name_bytes.data, name_bytes.len: i64,
+		prefix_bytes.data, prefix_bytes.len: i64,
+		remap_data, remap_lens, remap_string_lengths.len: u64,
+		alloc, deallocator);
+};
+
+export fn rosepka_create_pub(n: RoseNode, name: str,
+	message_length: u64, message_hz: u64) RosePublisher = {
+	let name_bytes = strings::toutf8(name);
+	return rose_c_create_pub(n, name_bytes.data, name_bytes.len: i64,
+		message_length, message_hz);
+};
+
+export fn rosepka_create_sub(n: RoseNode, name: str,
+	latest_only: u64, callback: RoseCallback) RoseSubscriber = {
+	let name_bytes = strings::toutf8(name);
+	return rose_c_create_sub(n, name_bytes.data, name_bytes.len: i64,
+		latest_only, callback);
+};
+
+export fn rosepka_get_param(n: RoseNode, param_name: str, param: RoseMsg) i64 = {
+	let name_bytes = strings::toutf8(param_name);
+	return rose_c_get_param(n, name_bytes.data, name_bytes.len: i64, param);
+};
+
+export fn rosepka_set_param(n: RoseNode, param_name: str, param: RoseMsg) i64 = {
+	let name_bytes = strings::toutf8(param_name);
+	return rose_c_set_param(n, name_bytes.data, name_bytes.len: i64, param);
+};
+
+export fn rosepka_log(node: RoseNode, level: i32, message: str) void = {
+	let bytes = strings::toutf8(message);
+	rose_c_log(node, level, bytes.data, bytes.len: i64);
+};
+
+export fn rosepka_info(message: str) void = {
+	let bytes = strings::toutf8(message);
+	rose_c_info(bytes.data, bytes.len: i64);
+};
+
+export fn rosepka_warn(message: str) void = {
+	let bytes = strings::toutf8(message);
+	rose_c_warn(bytes.data, bytes.len: i64);
+};
+
+export fn rosepka_error(message: str) void = {
+	let bytes = strings::toutf8(message);
+	rose_c_error(bytes.data, bytes.len: i64);
+};
+
+export fn rosepka_fatal(message: str) void = {
+	let bytes = strings::toutf8(message);
+	rose_c_fatal(bytes.data, bytes.len: i64);
+};
+
+export fn rosepka_topic_to_shm(shm: *u8, shm_size: size, topic: str) *u8 = {
+	let topic_buf: [512]u8 = [0...];
+	return rose_c_topic_to_shm(shm, shm_size,
+		rose_copy_cstr(topic_buf[0z..512z], topic));
+};
+
+export fn miragepka_write_fn(msg: MirageMsg, name: str, argc: i64) i64 = {
+	let name_bytes = strings::toutf8(name);
+	return mirage_c_write_fn(msg, name_bytes.data, name_bytes.len: i64, argc);
+};

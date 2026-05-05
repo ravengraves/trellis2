@@ -1,0 +1,104 @@
+// test_laser_glare.pka — Verify laser blinder/glare post-process behavior.
+
+use fb;
+
+fn laser_luma_at(rgb: []u8, w: i32, x: i32, y: i32) f32 = {
+	let idx: size = ((y * w + x) * 3): size;
+	let r = rgb[idx]: f32;
+	let g = rgb[idx + 1z]: f32;
+	let b = rgb[idx + 2z]: f32;
+	return r * 0.299 + g * 0.587 + b * 0.114;
+};
+
+fn laser_white_count(rgb: []u8, pixels: i32) i32 = {
+	let count: i32 = 0;
+	for (let i: i32 = 0; i < pixels; i += 1) {
+		let idx: size = (i * 3): size;
+		if ((rgb[idx]: i32) > 245 &&
+			(rgb[idx + 1z]: i32) > 245 &&
+			(rgb[idx + 2z]: i32) > 245) {
+			count = count + 1;
+		};
+	};
+	return count;
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_laser_glare ===");
+
+	let w: i32 = 128;
+	let h: i32 = 64;
+	let pixels = w * h;
+	let source: [24576]u8 = [0...];
+	for (let i: i32 = 0; i < pixels; i += 1) {
+		let idx: size = (i * 3): size;
+		source[idx] = 16u8;
+		source[idx + 1z] = 16u8;
+		source[idx + 2z] = 16u8;
+	};
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, w, h);
+	assert(e2_runtime_start(&rt), "engine start");
+	assert(e2_init_laser_glare_shader(), "laser glare shader init");
+
+	let tex = e2_gpu_texture_create_rgb(source[0z..24576z], w, h);
+	assert(tex.valid, "source texture valid");
+
+	let params = e2_laser_glare_params_default();
+	params.x = 0.5;
+	params.y = 0.5;
+	params.radius = 0.28;
+	params.decay = 1.8;
+	params.hot_radius = 0.18;
+	params.hot_strength = 1.0;
+	params.glare_strength = 0.82;
+	params.streak_strength = 0.55;
+
+	e2_pass_begin(&rt, color_black());
+	e2_pass_laser_glare(&rt, &tex, &params);
+	e2_pass_end(&rt);
+
+	let cx: i32 = 64;
+	let cy: i32 = 32;
+	let center = laser_luma_at(rt.fb.pixels[0z..24576z], w, cx, cy);
+	let near_r = laser_luma_at(rt.fb.pixels[0z..24576z], w, cx + 12, cy);
+	let near_u = laser_luma_at(rt.fb.pixels[0z..24576z], w, cx, cy - 12);
+	let far_r = laser_luma_at(rt.fb.pixels[0z..24576z], w, cx + 16, cy);
+	let off_axis = laser_luma_at(rt.fb.pixels[0z..24576z], w, cx + 16, cy + 9);
+	let corner = laser_luma_at(rt.fb.pixels[0z..24576z], w, 4, 4);
+
+	assert(center > 245.0, "laser glare hot center saturates white");
+	assert(near_r > 45.0, "laser glare radius brightens nearby horizontal pixels");
+	assert(near_u > 45.0, "laser glare radius brightens nearby vertical pixels");
+	assert(near_r < near_u + 35.0 && near_u < near_r + 35.0,
+		"laser glare radius respects aspect ratio");
+	assert(far_r > off_axis + 10.0, "laser glare creates a horizontal glare streak");
+	assert(corner < 30.0, "laser glare leaves distant pixels mostly unchanged");
+
+	params.radius = 1.0;
+	e2_pass_begin(&rt, color_black());
+	e2_pass_laser_glare(&rt, &tex, &params);
+	e2_pass_end(&rt);
+	let white = laser_white_count(rt.fb.pixels[0z..24576z], pixels);
+	assert(white == pixels, "laser glare radius one fills the image white");
+
+	let tbuf: [256]u8 = [0...];
+	let tf = fb::New(tbuf[0z..256z]);
+	fb::Write(&tf, "  luma center=");
+	fb::Wf64(&tf, center: f64, 1, "dec");
+	fb::Write(&tf, " near_r=");
+	fb::Wf64(&tf, near_r: f64, 1, "dec");
+	fb::Write(&tf, " near_u=");
+	fb::Wf64(&tf, near_u: f64, 1, "dec");
+	fb::Write(&tf, " streak=");
+	fb::Wf64(&tf, far_r: f64, 1, "dec");
+	fb::Write(&tf, " off=");
+	fb::Wf64(&tf, off_axis: f64, 1, "dec");
+	fb::Write(&tf, " full_white=");
+	fb::Wi64(&tf, white: i64);
+	fb::Println(&tf);
+
+	e2_gpu_texture_destroy(&tex);
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("=== test_laser_glare passed ===");
+};

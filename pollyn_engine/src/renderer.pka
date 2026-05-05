@@ -34,6 +34,10 @@ export @symbol("shim_gl_draw_triangles") fn shim_gl_draw_triangles(
 	vbo: u32, ibo: u32, attr_pos: i32, attr_norm: i32, index_count: i32) void;
 export @symbol("shim_gl_draw_lines")     fn shim_gl_draw_lines(
 	vbo: u32, attr_pos: i32, attr_color: i32, vertex_count: i32) void;
+export @symbol("shim_gl_draw_mesh_handles") fn shim_gl_draw_mesh_handles(
+	vbo: u32, ibo: u32, index_count: i32) void;
+export @symbol("shim_gl_draw_mesh_wire_handles") fn shim_gl_draw_mesh_wire_handles(
+	vbo: u32, wire_ibo: u32, wire_index_count: i32) void;
 
 // Window functions
 export @symbol("shim_window_create")       fn shim_window_create(w: i32, h: i32, title: *u8) i32;
@@ -139,18 +143,59 @@ export @symbol("shim_gl_create_texture_rgb_blurred") fn shim_gl_create_texture_r
 	data: *u8, w: i32, h: i32) u32;
 export @symbol("shim_gl_create_texture_rgba") fn shim_gl_create_texture_rgba(
 	data: *u8, w: i32, h: i32) u32;
+export @symbol("shim_gl_create_texture_from_png") fn shim_gl_create_texture_from_png(
+	filename: *u8, desired_channels: i32, out_w: *i32, out_h: *i32) u32;
+export @symbol("shim_gl_create_depth_texture_f32") fn shim_gl_create_depth_texture_f32(
+	data: *f32, w: i32, h: i32, znear: f32, zfar: f32) u32;
 export @symbol("shim_gl_update_texture_rgb") fn shim_gl_update_texture_rgb(
 	tex: u32, data: *u8, w: i32, h: i32) void;
 export @symbol("shim_gl_update_texture_rgb_blurred") fn shim_gl_update_texture_rgb_blurred(
 	tex: u32, data: *u8, w: i32, h: i32) void;
 export @symbol("shim_gl_update_texture_rgba") fn shim_gl_update_texture_rgba(
 	tex: u32, data: *u8, w: i32, h: i32) void;
+export @symbol("shim_gl_update_depth_texture_f32") fn shim_gl_update_depth_texture_f32(
+	tex: u32, data: *f32, w: i32, h: i32, znear: f32, zfar: f32) void;
 export @symbol("shim_gl_delete_texture") fn shim_gl_delete_texture(tex: u32) void;
 export @symbol("shim_gl_init_blit_shader") fn shim_gl_init_blit_shader(
 	blit_vs: *u8, blit_fs: *u8) i32;
+export @symbol("shim_gl_init_embedded_dust_shader") fn shim_gl_init_embedded_dust_shader() i32;
+export @symbol("shim_gl_init_embedded_radiation_shader") fn shim_gl_init_embedded_radiation_shader() i32;
+export @symbol("shim_gl_init_embedded_laser_glare_shader") fn shim_gl_init_embedded_laser_glare_shader() i32;
 export @symbol("shim_gl_draw_textured_quad") fn shim_gl_draw_textured_quad(
 	tex: u32, x: f32, y: f32, w: f32, h: f32,
 	screen_w: i32, screen_h: i32) void;
+export @symbol("shim_gl_draw_textured_quad_tiled") fn shim_gl_draw_textured_quad_tiled(
+	tex: u32, x: f32, y: f32, w: f32, h: f32,
+	screen_w: i32, screen_h: i32, tiles_x: f32, tiles_y: f32) void;
+export @symbol("shim_gl_draw_dust_quad") fn shim_gl_draw_dust_quad(
+	color_tex: u32, depth_tex: u32,
+	x: f32, y: f32, w: f32, h: f32,
+	screen_w: i32, screen_h: i32,
+	dust_r: f32, dust_g: f32, dust_b: f32,
+	znear: f32, zfar: f32,
+	start: f32, end: f32, falloff_distance: f32, density: f32,
+	noise_strength: f32, noise_scale: f32,
+	blur_px: f32, time_sec: f32) void;
+export @symbol("shim_gl_draw_radiation_quad") fn shim_gl_draw_radiation_quad(
+	tex: u32,
+	x: f32, y: f32, w: f32, h: f32,
+	screen_w: i32, screen_h: i32,
+	density: f32,
+	min_value: f32,
+	max_value: f32,
+	seed: f32) void;
+export @symbol("shim_gl_draw_laser_glare_quad") fn shim_gl_draw_laser_glare_quad(
+	tex: u32,
+	x: f32, y: f32, w: f32, h: f32,
+	screen_w: i32, screen_h: i32,
+	center_x: f32,
+	center_y: f32,
+	radius: f32,
+	decay: f32,
+	hot_radius: f32,
+	hot_strength: f32,
+	glare_strength: f32,
+	streak_strength: f32) void;
 
 // ================================================================
 // Shared constants (used by engine.pka Scene as well)
@@ -165,6 +210,17 @@ export def REND_MAX_LINE_VERTS: size = 1024z;
 
 export type RenderInstance = struct {
 	mesh: *Mesh,
+	model: Mat4,
+	color: Color,
+	mat: Material,
+};
+
+// GPU-handle instance. Prefer this over RenderInstance for hot paths: geometry
+// is already resident in VBO/IBO handles, so only uniforms/model matrices change.
+export type RenderGpuInstance = struct {
+	vbo: u32,
+	ibo: u32,
+	index_count: i32,
 	model: Mat4,
 	color: Color,
 	mat: Material,
@@ -252,28 +308,33 @@ export fn render_pack_pbr_lights(lights: []Light,
 	return count;
 };
 
-// Render mesh instances using GPU shaders
+fn render_pack_env(env: *IrradianceEnv, out: []f32) void = {
+	out[0z] = env.sky_color.r;
+	out[1z] = env.sky_color.g;
+	out[2z] = env.sky_color.b;
+	out[3z] = env.ground_color.r;
+	out[4z] = env.ground_color.g;
+	out[5z] = env.ground_color.b;
+	out[6z] = env.horizon_color.r;
+	out[7z] = env.horizon_color.g;
+	out[8z] = env.horizon_color.b;
+	out[9z] = env.specular_color.r;
+	out[10z] = env.specular_color.g;
+	out[11z] = env.specular_color.b;
+	out[12z] = env.intensity;
+	out[13z] = env.ibl_diffuse_mix;
+	out[14z] = env.ibl_specular_mix;
+};
+
+// Legacy CPU mesh path. This uploads mesh vertex/index data during every draw.
+// Prefer render_gpu_instances() or e2_pass_3d_geom() for normal rendering.
 export fn render_instances(instances: *[REND_MAX_INSTANCES]RenderInstance,
                            count: i32, mvp_base: *Mat4,
                            light: Light, cam_eye: Vec3,
                            env: *IrradianceEnv) void = {
 	// Pack environment into float array for shim
 	let env_data: [ENV_PACK_SIZE]f32 = [0.0...];
-	env_data[0z] = env.sky_color.r;
-	env_data[1z] = env.sky_color.g;
-	env_data[2z] = env.sky_color.b;
-	env_data[3z] = env.ground_color.r;
-	env_data[4z] = env.ground_color.g;
-	env_data[5z] = env.ground_color.b;
-	env_data[6z] = env.horizon_color.r;
-	env_data[7z] = env.horizon_color.g;
-	env_data[8z] = env.horizon_color.b;
-	env_data[9z] = env.specular_color.r;
-	env_data[10z] = env.specular_color.g;
-	env_data[11z] = env.specular_color.b;
-	env_data[12z] = env.intensity;
-	env_data[13z] = env.ibl_diffuse_mix;
-	env_data[14z] = env.ibl_specular_mix;
+	render_pack_env(env, env_data[0z..ENV_PACK_SIZE]);
 	let light_data: [REND_PBR_LIGHT_FLOATS]f32 = [0.0...];
 	render_pack_pbr_light(light_data[0z..REND_PBR_LIGHT_FLOATS], 0, light);
 
@@ -307,6 +368,53 @@ export fn render_instances(instances: *[REND_MAX_INSTANCES]RenderInstance,
 
 		shim_gl_draw_mesh(&mesh.verts[0z], mesh.vert_count * VERT_STRIDE,
 			&mesh.indices[0z], mesh.index_count);
+
+		inst_i = inst_i + 1;
+	};
+};
+
+// Render GPU-resident mesh instances. This is the handle-based alternative to
+// render_instances() and does not re-upload geometry.
+export fn render_gpu_instances(instances: *[REND_MAX_INSTANCES]RenderGpuInstance,
+                               count: i32, mvp_base: *Mat4,
+                               light: Light, cam_eye: Vec3,
+                               env: *IrradianceEnv) void = {
+	let env_data: [ENV_PACK_SIZE]f32 = [0.0...];
+	render_pack_env(env, env_data[0z..ENV_PACK_SIZE]);
+	let light_data: [REND_PBR_LIGHT_FLOATS]f32 = [0.0...];
+	render_pack_pbr_light(light_data[0z..REND_PBR_LIGHT_FLOATS], 0, light);
+
+	let inst_i: i32 = 0;
+	for (inst_i < count) {
+		let sidx: size = inst_i: size;
+		let inst = &instances[sidx];
+		if (inst.vbo == 0u32 || inst.ibo == 0u32 || inst.index_count <= 0) {
+			inst_i = inst_i + 1;
+			continue;
+		};
+		let full_mvp = mat4_mul(mvp_base, &inst.model);
+
+		if (inst.mat.shading == SHADE_PBR) {
+			let eye = cam_eye;
+			shim_gl_begin_pbr(&full_mvp.d[0z], &inst.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				eye.x, eye.y, eye.z,
+				inst.mat.albedo.r, inst.mat.albedo.g, inst.mat.albedo.b,
+				inst.mat.metallic, inst.mat.roughness,
+				&env_data[0z], inst.mat.albedo.a);
+			shim_gl_set_pbr_lights(&light_data[0z], 1);
+			shim_gl_set_pbr_ibl_textures(env.ibl_global_tex, env.ibl_global_blur_tex,
+				env.ibl_local_tex, env.ibl_local_blur_tex);
+		} else {
+			shim_gl_begin_flat(&full_mvp.d[0z], &inst.model.d[0z],
+				light.direction.x, light.direction.y, light.direction.z,
+				light.color.r, light.color.g, light.color.b,
+				inst.color.r, inst.color.g, inst.color.b, inst.color.a);
+		};
+		shim_gl_set_material_textures(inst.mat.texture, inst.mat.orm_texture,
+			inst.mat.normal_texture);
+		shim_gl_draw_mesh_handles(inst.vbo, inst.ibo, inst.index_count);
 
 		inst_i = inst_i + 1;
 	};
@@ -363,7 +471,7 @@ export @symbol("shim_gl_begin_depth") fn shim_gl_begin_depth(
 export @symbol("shim_gl_fbo_read_depth_encoded") fn shim_gl_fbo_read_depth_encoded(
 	out: *f32, w: i32, h: i32, znear: f32, zfar: f32) void;
 
-// Render mesh instances using depth shader only (no color, no lighting)
+// Legacy CPU mesh depth path. Prefer render_gpu_instances_depth().
 export fn render_instances_depth(instances: *[REND_MAX_INSTANCES]RenderInstance,
                                   count: i32, mvp_base: *Mat4,
                                   cam_eye: Vec3,
@@ -383,6 +491,48 @@ export fn render_instances_depth(instances: *[REND_MAX_INSTANCES]RenderInstance,
 
 		di = di + 1;
 	};
+};
+
+// Render GPU-resident mesh instances using depth shader only.
+export fn render_gpu_instances_depth(instances: *[REND_MAX_INSTANCES]RenderGpuInstance,
+                                     count: i32, mvp_base: *Mat4,
+                                     cam_eye: Vec3,
+                                     znear: f32, zfar: f32) void = {
+	let di: i32 = 0;
+	for (di < count) {
+		let sidx: size = di: size;
+		let inst = &instances[sidx];
+		if (inst.vbo == 0u32 || inst.ibo == 0u32 || inst.index_count <= 0) {
+			di = di + 1;
+			continue;
+		};
+		let full_mvp = mat4_mul(mvp_base, &inst.model);
+
+		shim_gl_begin_depth(&full_mvp.d[0z], &inst.model.d[0z],
+			cam_eye.x, cam_eye.y, cam_eye.z,
+			znear, zfar);
+		shim_gl_draw_mesh_handles(inst.vbo, inst.ibo, inst.index_count);
+
+		di = di + 1;
+	};
+};
+
+// Convenience: create FBO, render GPU instances, read back pixels, destroy FBO.
+export fn render_gpu_to_fb(fb: *Framebuffer,
+                           instances: *[REND_MAX_INSTANCES]RenderGpuInstance,
+                           count: i32, mvp: *Mat4, light: Light,
+                           cam_eye: Vec3, env: *IrradianceEnv) void = {
+	shim_gl_fbo_create(fb.width, fb.height);
+	shim_gl_fbo_bind();
+	shim_gl_clear(0.0, 0.0, 0.0, 1.0);
+	shim_gl_enable_depth();
+	shim_gl_enable_blend();
+	shim_gl_viewport(0, 0, fb.width, fb.height);
+	render_gpu_instances(instances, count, mvp, light, cam_eye, env);
+	shim_gl_disable_blend();
+	shim_gl_fbo_read_pixels_flipped(&fb.pixels[0z], fb.width, fb.height);
+	shim_gl_fbo_unbind();
+	shim_gl_fbo_destroy();
 };
 
 // Convenience: create FBO, render color + depth, read back, destroy FBO

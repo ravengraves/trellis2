@@ -19,6 +19,9 @@ SHADERS = [
     ("Constant Color Shader (uniform object/pass color)", [("constant.vert", "CONSTANT_VS"), ("constant.frag", "CONSTANT_FS")]),
     ("Text Shader (font atlas overlays)", [("text.vert", "TEXT_VS"), ("text.frag", "TEXT_FS")]),
     ("Blit Shader (2D texture overlays)", [("blit.vert", "BLIT_VS"), ("blit.frag", "BLIT_FS")]),
+    ("Dust Shader (depth-based post-process)", [("dust.vert", "DUST_VS"), ("dust.frag", "DUST_FS")]),
+    ("Radiation Noise Shader (stochastic channel spikes)", [("radiation.vert", "RADIATION_VS"), ("radiation.frag", "RADIATION_FS")]),
+    ("Laser Glare Shader (blinding radial glare)", [("laser_glare.vert", "LASER_GLARE_VS"), ("laser_glare.frag", "LASER_GLARE_FS")]),
 ]
 
 def glsl_to_c_string(text):

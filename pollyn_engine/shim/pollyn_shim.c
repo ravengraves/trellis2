@@ -15,6 +15,22 @@
 #include <stdint.h>
 #include <time.h>
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wconversion"
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+#pragma GCC diagnostic ignored "-Wmisleading-indentation"
+#endif
+#define STBI_ONLY_PNG
+#define STBI_NO_HDR
+#define STBI_NO_LINEAR
+#define STB_IMAGE_IMPLEMENTATION
+#include "../../../trellis/vendor/mujoco/dependencies/tinyobjloader/examples/viewer/stb_image.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 /* Prefer Pika stdlib-generated timing symbols when they are linked in.
  * Weak linkage lets shim-only targets keep building without clock.pka users. */
 extern int64_t clock_TimeNS(void) __attribute__((weak));
@@ -2089,8 +2105,33 @@ void shim_gl_fbo_read_depth_encoded(float *out_depth, int w, int h,
 
 static GLuint g_blit_prog = 0;
 static GLint g_blit_a_pos, g_blit_a_uv;
-static GLint g_blit_u_screen, g_blit_u_tex;
+static GLint g_blit_u_screen, g_blit_u_tex, g_blit_u_tiled;
 static GLuint g_blit_vbo = 0;
+
+static GLuint g_dust_prog = 0;
+static GLint g_dust_a_pos, g_dust_a_uv;
+static GLint g_dust_u_screen, g_dust_u_color_tex, g_dust_u_depth_tex;
+static GLint g_dust_u_texel, g_dust_u_dust_color, g_dust_u_znear, g_dust_u_zfar;
+static GLint g_dust_u_start, g_dust_u_end, g_dust_u_falloff_distance, g_dust_u_density;
+static GLint g_dust_u_noise_strength, g_dust_u_noise_scale;
+static GLint g_dust_u_blur_px, g_dust_u_time;
+static GLuint g_dust_vbo = 0;
+
+static GLuint g_radiation_prog = 0;
+static GLint g_radiation_a_pos, g_radiation_a_uv;
+static GLint g_radiation_u_screen, g_radiation_u_tex;
+static GLint g_radiation_u_density, g_radiation_u_min_value;
+static GLint g_radiation_u_max_value, g_radiation_u_seed;
+static GLuint g_radiation_vbo = 0;
+
+static GLuint g_laser_glare_prog = 0;
+static GLint g_laser_glare_a_pos, g_laser_glare_a_uv;
+static GLint g_laser_glare_u_screen, g_laser_glare_u_tex;
+static GLint g_laser_glare_u_center, g_laser_glare_u_radius;
+static GLint g_laser_glare_u_decay, g_laser_glare_u_hot_radius;
+static GLint g_laser_glare_u_hot_strength, g_laser_glare_u_glare_strength;
+static GLint g_laser_glare_u_streak_strength;
+static GLuint g_laser_glare_vbo = 0;
 
 static void shim_gl_set_texture_params(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -2108,6 +2149,50 @@ static unsigned char *shim_rgb_to_rgba(const unsigned char *data, int w, int h) 
         rgba[i * 4 + 1] = data[i * 3 + 1];
         rgba[i * 4 + 2] = data[i * 3 + 2];
         rgba[i * 4 + 3] = 255;
+    }
+    return rgba;
+}
+
+static void shim_pack_depth01(float depth01, unsigned char *out) {
+    const float max_depth01 = 1.0f - (1.0f / 16777216.0f);
+    if (depth01 < 0.0f) depth01 = 0.0f;
+    if (depth01 > max_depth01) depth01 = max_depth01;
+
+    float e0 = depth01 - floorf(depth01);
+    float e1 = depth01 * 255.0f;
+    float e2 = depth01 * 65025.0f;
+    float e3 = depth01 * 16581375.0f;
+    e1 = e1 - floorf(e1);
+    e2 = e2 - floorf(e2);
+    e3 = e3 - floorf(e3);
+    e0 -= e1 * (1.0f / 255.0f);
+    e1 -= e2 * (1.0f / 255.0f);
+    e2 -= e3 * (1.0f / 255.0f);
+    if (e0 < 0.0f) e0 = 0.0f;
+    if (e1 < 0.0f) e1 = 0.0f;
+    if (e2 < 0.0f) e2 = 0.0f;
+    if (e3 < 0.0f) e3 = 0.0f;
+    if (e0 > 1.0f) e0 = 1.0f;
+    if (e1 > 1.0f) e1 = 1.0f;
+    if (e2 > 1.0f) e2 = 1.0f;
+    if (e3 > 1.0f) e3 = 1.0f;
+    out[0] = (unsigned char)(e0 * 255.0f + 0.5f);
+    out[1] = (unsigned char)(e1 * 255.0f + 0.5f);
+    out[2] = (unsigned char)(e2 * 255.0f + 0.5f);
+    out[3] = (unsigned char)(e3 * 255.0f + 0.5f);
+}
+
+static unsigned char *shim_depth_f32_to_rgba(const float *depth,
+                                             int w, int h,
+                                             float znear, float zfar) {
+    size_t pixel_count = (size_t)w * (size_t)h;
+    unsigned char *rgba = (unsigned char *)malloc(pixel_count * 4);
+    if (!rgba) return NULL;
+    float range = zfar - znear;
+    if (range <= 0.0f) range = 1.0f;
+    for (size_t i = 0; i < pixel_count; i++) {
+        float depth01 = (depth[i] - znear) / range;
+        shim_pack_depth01(depth01, rgba + i * 4);
     }
     return rgba;
 }
@@ -2204,6 +2289,59 @@ unsigned int shim_gl_create_texture_rgba(unsigned char *data, int w, int h) {
     return (unsigned int)tex;
 }
 
+unsigned int shim_gl_create_texture_from_png(unsigned char *filename,
+                                             int desired_channels,
+                                             int *out_w, int *out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!filename) return 0;
+
+    int channels = desired_channels;
+    if (channels != 3 && channels != 4) {
+        channels = 4;
+    }
+
+    int w = 0, h = 0, src_channels = 0;
+    /* Mesh UVs use OpenGL's bottom-left texture convention. */
+    stbi_set_flip_vertically_on_load(1);
+    unsigned char *pixels = stbi_load((const char *)filename,
+                                      &w, &h, &src_channels, channels);
+    if (!pixels || w <= 0 || h <= 0) {
+        if (pixels) stbi_image_free(pixels);
+        return 0;
+    }
+
+    unsigned int tex = 0;
+    if (channels == 3) {
+        tex = shim_gl_create_texture_rgb(pixels, w, h);
+    } else {
+        tex = shim_gl_create_texture_rgba(pixels, w, h);
+    }
+    stbi_image_free(pixels);
+
+    if (tex != 0) {
+        if (out_w) *out_w = w;
+        if (out_h) *out_h = h;
+    }
+    return tex;
+}
+
+unsigned int shim_gl_create_depth_texture_f32(float *data, int w, int h,
+                                               float znear, float zfar) {
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    shim_gl_set_texture_params();
+    unsigned char *rgba = shim_depth_f32_to_rgba(data, w, h, znear, zfar);
+    if (rgba) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        free(rgba);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return (unsigned int)tex;
+}
+
 void shim_gl_update_texture_rgb(unsigned int tex, unsigned char *data, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, tex);
     unsigned char *rgba = shim_rgb_to_rgba(data, w, h);
@@ -2234,6 +2372,18 @@ void shim_gl_update_texture_rgba(unsigned int tex, unsigned char *data, int w, i
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+void shim_gl_update_depth_texture_f32(unsigned int tex, float *data, int w, int h,
+                                      float znear, float zfar) {
+    glBindTexture(GL_TEXTURE_2D, tex);
+    unsigned char *rgba = shim_depth_f32_to_rgba(data, w, h, znear, zfar);
+    if (rgba) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        free(rgba);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 void shim_gl_delete_texture(unsigned int tex) {
     GLuint t = (GLuint)tex;
     glDeleteTextures(1, &t);
@@ -2249,6 +2399,7 @@ int shim_gl_init_blit_shader(unsigned char *blit_vs, unsigned char *blit_fs) {
     g_blit_a_uv    = glGetAttribLocation(g_blit_prog, "a_uv");
     g_blit_u_screen = glGetUniformLocation(g_blit_prog, "u_screen");
     g_blit_u_tex   = glGetUniformLocation(g_blit_prog, "u_tex");
+    g_blit_u_tiled = glGetUniformLocation(g_blit_prog, "u_tiled");
     if (!g_blit_vbo) glGenBuffers(1, &g_blit_vbo);
     return 0;
 }
@@ -2260,10 +2411,14 @@ int shim_gl_init_embedded_blit_shader(void) {
 
 /* Draw a textured quad at screen position (x,y) with size (w,h) in pixels.
  * screen_w, screen_h = viewport dimensions for NDC conversion. */
-void shim_gl_draw_textured_quad(unsigned int tex,
-                                float x, float y, float w, float h,
-                                int screen_w, int screen_h) {
+static void shim_gl_draw_textured_quad_uv(unsigned int tex,
+                                          float x, float y, float w, float h,
+                                          int screen_w, int screen_h,
+                                          float tiles_x, float tiles_y,
+                                          int tiled) {
     if (!g_blit_prog) return;
+    if (tiles_x <= 0.0f) tiles_x = 1.0f;
+    if (tiles_y <= 0.0f) tiles_y = 1.0f;
 
     GLboolean had_depth = glIsEnabled(GL_DEPTH_TEST);
     GLboolean had_blend = glIsEnabled(GL_BLEND);
@@ -2274,19 +2429,23 @@ void shim_gl_draw_textured_quad(unsigned int tex,
     glUseProgram(g_blit_prog);
     glUniform2f(g_blit_u_screen, (float)screen_w, (float)screen_h);
     glUniform1i(g_blit_u_tex, 0);
+    if (g_blit_u_tiled >= 0) {
+        glUniform1i(g_blit_u_tiled, tiled ? 1 : 0);
+    }
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
 
     /* Build quad: 2 triangles, interleaved pos(x,y) + uv(u,v) */
     float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    float u0 = 0.0f, v0 = 0.0f, u1 = tiles_x, v1 = tiles_y;
     float verts[24] = {
-        x0, y0, 0.0f, 0.0f,
-        x1, y0, 1.0f, 0.0f,
-        x1, y1, 1.0f, 1.0f,
-        x0, y0, 0.0f, 0.0f,
-        x1, y1, 1.0f, 1.0f,
-        x0, y1, 0.0f, 1.0f,
+        x0, y0, u0, v0,
+        x1, y0, u1, v0,
+        x1, y1, u1, v1,
+        x0, y0, u0, v0,
+        x1, y1, u1, v1,
+        x0, y1, u0, v1,
     };
 
     glBindBuffer(GL_ARRAY_BUFFER, g_blit_vbo);
@@ -2316,6 +2475,308 @@ void shim_gl_draw_textured_quad(unsigned int tex,
     if (!had_blend) glDisable(GL_BLEND);
 }
 
+void shim_gl_draw_textured_quad(unsigned int tex,
+                                float x, float y, float w, float h,
+                                int screen_w, int screen_h) {
+    shim_gl_draw_textured_quad_uv(tex, x, y, w, h, screen_w, screen_h,
+                                  1.0f, 1.0f, 0);
+}
+
+void shim_gl_draw_textured_quad_tiled(unsigned int tex,
+                                      float x, float y, float w, float h,
+                                      int screen_w, int screen_h,
+                                      float tiles_x, float tiles_y) {
+    shim_gl_draw_textured_quad_uv(tex, x, y, w, h, screen_w, screen_h,
+                                  tiles_x, tiles_y, 1);
+}
+
+int shim_gl_init_dust_shader(unsigned char *dust_vs, unsigned char *dust_fs) {
+    if (g_dust_prog) return 0;
+    g_dust_prog = compile_prog((const char *)dust_vs, (const char *)dust_fs);
+    if (!g_dust_prog) return -1;
+    g_dust_a_pos = glGetAttribLocation(g_dust_prog, "a_pos");
+    g_dust_a_uv = glGetAttribLocation(g_dust_prog, "a_uv");
+    g_dust_u_screen = glGetUniformLocation(g_dust_prog, "u_screen");
+    g_dust_u_color_tex = glGetUniformLocation(g_dust_prog, "u_color_tex");
+    g_dust_u_depth_tex = glGetUniformLocation(g_dust_prog, "u_depth_tex");
+    g_dust_u_texel = glGetUniformLocation(g_dust_prog, "u_texel");
+    g_dust_u_dust_color = glGetUniformLocation(g_dust_prog, "u_dust_color");
+    g_dust_u_znear = glGetUniformLocation(g_dust_prog, "u_znear");
+    g_dust_u_zfar = glGetUniformLocation(g_dust_prog, "u_zfar");
+    g_dust_u_start = glGetUniformLocation(g_dust_prog, "u_start");
+    g_dust_u_end = glGetUniformLocation(g_dust_prog, "u_end");
+    g_dust_u_falloff_distance = glGetUniformLocation(g_dust_prog, "u_falloff_distance");
+    g_dust_u_density = glGetUniformLocation(g_dust_prog, "u_density");
+    g_dust_u_noise_strength = glGetUniformLocation(g_dust_prog, "u_noise_strength");
+    g_dust_u_noise_scale = glGetUniformLocation(g_dust_prog, "u_noise_scale");
+    g_dust_u_blur_px = glGetUniformLocation(g_dust_prog, "u_blur_px");
+    g_dust_u_time = glGetUniformLocation(g_dust_prog, "u_time");
+    if (!g_dust_vbo) glGenBuffers(1, &g_dust_vbo);
+    return 0;
+}
+
+int shim_gl_init_embedded_dust_shader(void) {
+    return shim_gl_init_dust_shader(
+        (unsigned char *)DUST_VS, (unsigned char *)DUST_FS);
+}
+
+void shim_gl_draw_dust_quad(unsigned int color_tex, unsigned int depth_tex,
+                            float x, float y, float w, float h,
+                            int screen_w, int screen_h,
+                            float dust_r, float dust_g, float dust_b,
+                            float znear, float zfar,
+                            float start, float end, float falloff_distance, float density,
+                            float noise_strength, float noise_scale,
+                            float blur_px, float time_sec) {
+    if (!g_dust_prog) return;
+    if (screen_w <= 0 || screen_h <= 0) return;
+
+    GLboolean had_depth = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean had_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+
+    glUseProgram(g_dust_prog);
+    glUniform2f(g_dust_u_screen, (float)screen_w, (float)screen_h);
+    glUniform1i(g_dust_u_color_tex, 0);
+    glUniform1i(g_dust_u_depth_tex, 1);
+    glUniform2f(g_dust_u_texel, 1.0f / (float)screen_w, 1.0f / (float)screen_h);
+    glUniform3f(g_dust_u_dust_color, dust_r, dust_g, dust_b);
+    glUniform1f(g_dust_u_znear, znear);
+    glUniform1f(g_dust_u_zfar, zfar);
+    glUniform1f(g_dust_u_start, start);
+    glUniform1f(g_dust_u_end, end);
+    glUniform1f(g_dust_u_falloff_distance, falloff_distance);
+    glUniform1f(g_dust_u_density, density);
+    glUniform1f(g_dust_u_noise_strength, noise_strength);
+    glUniform1f(g_dust_u_noise_scale, noise_scale);
+    glUniform1f(g_dust_u_blur_px, blur_px);
+    glUniform1f(g_dust_u_time, time_sec);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, color_tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, depth_tex);
+
+    float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    float verts[24] = {
+        x0, y0, 0.0f, 0.0f,
+        x1, y0, 1.0f, 0.0f,
+        x1, y1, 1.0f, 1.0f,
+        x0, y0, 0.0f, 0.0f,
+        x1, y1, 1.0f, 1.0f,
+        x0, y1, 0.0f, 1.0f,
+    };
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_dust_vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof(verts), verts, GL_STREAM_DRAW);
+    if (g_dust_a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)g_dust_a_pos);
+        glVertexAttribPointer((GLuint)g_dust_a_pos, 2, GL_FLOAT, GL_FALSE,
+                              4 * (int)sizeof(float), (void *)0);
+    }
+    if (g_dust_a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)g_dust_a_uv);
+        glVertexAttribPointer((GLuint)g_dust_a_uv, 2, GL_FLOAT, GL_FALSE,
+                              4 * (int)sizeof(float),
+                              (void *)(intptr_t)(2 * sizeof(float)));
+    }
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    if (g_dust_a_pos >= 0) glDisableVertexAttribArray((GLuint)g_dust_a_pos);
+    if (g_dust_a_uv >= 0) glDisableVertexAttribArray((GLuint)g_dust_a_uv);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (had_depth) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    if (had_blend) glEnable(GL_BLEND);
+    else glDisable(GL_BLEND);
+}
+
+int shim_gl_init_radiation_shader(unsigned char *radiation_vs,
+                                  unsigned char *radiation_fs) {
+    if (g_radiation_prog) return 0;
+    g_radiation_prog = compile_prog((const char *)radiation_vs,
+                                    (const char *)radiation_fs);
+    if (!g_radiation_prog) return -1;
+    g_radiation_a_pos = glGetAttribLocation(g_radiation_prog, "a_pos");
+    g_radiation_a_uv = glGetAttribLocation(g_radiation_prog, "a_uv");
+    g_radiation_u_screen = glGetUniformLocation(g_radiation_prog, "u_screen");
+    g_radiation_u_tex = glGetUniformLocation(g_radiation_prog, "u_tex");
+    g_radiation_u_density = glGetUniformLocation(g_radiation_prog, "u_density");
+    g_radiation_u_min_value = glGetUniformLocation(g_radiation_prog, "u_min_value");
+    g_radiation_u_max_value = glGetUniformLocation(g_radiation_prog, "u_max_value");
+    g_radiation_u_seed = glGetUniformLocation(g_radiation_prog, "u_seed");
+    if (!g_radiation_vbo) glGenBuffers(1, &g_radiation_vbo);
+    return 0;
+}
+
+int shim_gl_init_embedded_radiation_shader(void) {
+    return shim_gl_init_radiation_shader(
+        (unsigned char *)RADIATION_VS, (unsigned char *)RADIATION_FS);
+}
+
+void shim_gl_draw_radiation_quad(unsigned int tex,
+                                 float x, float y, float w, float h,
+                                 int screen_w, int screen_h,
+                                 float density,
+                                 float min_value,
+                                 float max_value,
+                                 float seed) {
+    if (!g_radiation_prog) return;
+    if (screen_w <= 0 || screen_h <= 0) return;
+
+    GLboolean had_depth = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean had_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+
+    glUseProgram(g_radiation_prog);
+    glUniform2f(g_radiation_u_screen, (float)screen_w, (float)screen_h);
+    glUniform1i(g_radiation_u_tex, 0);
+    glUniform1f(g_radiation_u_density, density);
+    glUniform1f(g_radiation_u_min_value, min_value);
+    glUniform1f(g_radiation_u_max_value, max_value);
+    glUniform1f(g_radiation_u_seed, seed);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    float verts[24] = {
+        x0, y0, 0.0f, 0.0f,
+        x1, y0, 1.0f, 0.0f,
+        x1, y1, 1.0f, 1.0f,
+        x0, y0, 0.0f, 0.0f,
+        x1, y1, 1.0f, 1.0f,
+        x0, y1, 0.0f, 1.0f,
+    };
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_radiation_vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof(verts), verts, GL_STREAM_DRAW);
+    if (g_radiation_a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)g_radiation_a_pos);
+        glVertexAttribPointer((GLuint)g_radiation_a_pos, 2, GL_FLOAT, GL_FALSE,
+                              4 * (int)sizeof(float), (void *)0);
+    }
+    if (g_radiation_a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)g_radiation_a_uv);
+        glVertexAttribPointer((GLuint)g_radiation_a_uv, 2, GL_FLOAT, GL_FALSE,
+                              4 * (int)sizeof(float),
+                              (void *)(intptr_t)(2 * sizeof(float)));
+    }
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    if (g_radiation_a_pos >= 0) glDisableVertexAttribArray((GLuint)g_radiation_a_pos);
+    if (g_radiation_a_uv >= 0) glDisableVertexAttribArray((GLuint)g_radiation_a_uv);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (had_depth) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    if (had_blend) glEnable(GL_BLEND);
+    else glDisable(GL_BLEND);
+}
+
+int shim_gl_init_laser_glare_shader(unsigned char *laser_glare_vs,
+                                    unsigned char *laser_glare_fs) {
+    if (g_laser_glare_prog) return 0;
+    g_laser_glare_prog = compile_prog((const char *)laser_glare_vs,
+                                      (const char *)laser_glare_fs);
+    if (!g_laser_glare_prog) return -1;
+    g_laser_glare_a_pos = glGetAttribLocation(g_laser_glare_prog, "a_pos");
+    g_laser_glare_a_uv = glGetAttribLocation(g_laser_glare_prog, "a_uv");
+    g_laser_glare_u_screen = glGetUniformLocation(g_laser_glare_prog, "u_screen");
+    g_laser_glare_u_tex = glGetUniformLocation(g_laser_glare_prog, "u_tex");
+    g_laser_glare_u_center = glGetUniformLocation(g_laser_glare_prog, "u_center");
+    g_laser_glare_u_radius = glGetUniformLocation(g_laser_glare_prog, "u_radius");
+    g_laser_glare_u_decay = glGetUniformLocation(g_laser_glare_prog, "u_decay");
+    g_laser_glare_u_hot_radius = glGetUniformLocation(g_laser_glare_prog, "u_hot_radius");
+    g_laser_glare_u_hot_strength = glGetUniformLocation(g_laser_glare_prog, "u_hot_strength");
+    g_laser_glare_u_glare_strength = glGetUniformLocation(g_laser_glare_prog, "u_glare_strength");
+    g_laser_glare_u_streak_strength = glGetUniformLocation(g_laser_glare_prog, "u_streak_strength");
+    if (!g_laser_glare_vbo) glGenBuffers(1, &g_laser_glare_vbo);
+    return 0;
+}
+
+int shim_gl_init_embedded_laser_glare_shader(void) {
+    return shim_gl_init_laser_glare_shader(
+        (unsigned char *)LASER_GLARE_VS, (unsigned char *)LASER_GLARE_FS);
+}
+
+void shim_gl_draw_laser_glare_quad(unsigned int tex,
+                                   float x, float y, float w, float h,
+                                   int screen_w, int screen_h,
+                                   float center_x, float center_y,
+                                   float radius, float decay,
+                                   float hot_radius, float hot_strength,
+                                   float glare_strength,
+                                   float streak_strength) {
+    if (!g_laser_glare_prog) return;
+    if (screen_w <= 0 || screen_h <= 0) return;
+
+    GLboolean had_depth = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean had_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+
+    glUseProgram(g_laser_glare_prog);
+    glUniform2f(g_laser_glare_u_screen, (float)screen_w, (float)screen_h);
+    glUniform1i(g_laser_glare_u_tex, 0);
+    glUniform2f(g_laser_glare_u_center, center_x, center_y);
+    glUniform1f(g_laser_glare_u_radius, radius);
+    glUniform1f(g_laser_glare_u_decay, decay);
+    glUniform1f(g_laser_glare_u_hot_radius, hot_radius);
+    glUniform1f(g_laser_glare_u_hot_strength, hot_strength);
+    glUniform1f(g_laser_glare_u_glare_strength, glare_strength);
+    glUniform1f(g_laser_glare_u_streak_strength, streak_strength);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    float verts[24] = {
+        x0, y0, 0.0f, 0.0f,
+        x1, y0, 1.0f, 0.0f,
+        x1, y1, 1.0f, 1.0f,
+        x0, y0, 0.0f, 0.0f,
+        x1, y1, 1.0f, 1.0f,
+        x0, y1, 0.0f, 1.0f,
+    };
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_laser_glare_vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof(verts), verts, GL_STREAM_DRAW);
+    if (g_laser_glare_a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)g_laser_glare_a_pos);
+        glVertexAttribPointer((GLuint)g_laser_glare_a_pos, 2, GL_FLOAT, GL_FALSE,
+                              4 * (int)sizeof(float), (void *)0);
+    }
+    if (g_laser_glare_a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)g_laser_glare_a_uv);
+        glVertexAttribPointer((GLuint)g_laser_glare_a_uv, 2, GL_FLOAT, GL_FALSE,
+                              4 * (int)sizeof(float),
+                              (void *)(intptr_t)(2 * sizeof(float)));
+    }
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    if (g_laser_glare_a_pos >= 0) glDisableVertexAttribArray((GLuint)g_laser_glare_a_pos);
+    if (g_laser_glare_a_uv >= 0) glDisableVertexAttribArray((GLuint)g_laser_glare_a_uv);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (had_depth) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    if (had_blend) glEnable(GL_BLEND);
+    else glDisable(GL_BLEND);
+}
+
 /* ================================================================
  * PPM file writer (for render verification)
  * ================================================================ */
@@ -2327,6 +2788,227 @@ int shim_write_ppm(unsigned char *filename, unsigned char *pixels, int w, int h)
     fwrite(pixels, 1, (size_t)(w * h * 3), f);
     fclose(f);
     return 0;
+}
+
+/* ================================================================
+ * Minimal OBJ loader for Blender-style static textured meshes.
+ * Supports v/vt/vn/f records and triangulates polygons as a fan.
+ * ================================================================ */
+
+typedef struct {
+    float x, y, z;
+} ShimVec3;
+
+typedef struct {
+    float u, v;
+} ShimVec2;
+
+static ShimVec3 shim_vec3_sub(ShimVec3 a, ShimVec3 b) {
+    ShimVec3 r = {a.x - b.x, a.y - b.y, a.z - b.z};
+    return r;
+}
+
+static ShimVec3 shim_vec3_cross(ShimVec3 a, ShimVec3 b) {
+    ShimVec3 r = {
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+    return r;
+}
+
+static ShimVec3 shim_vec3_normalize(ShimVec3 v) {
+    float len = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+    if (len <= 0.0001f) {
+        ShimVec3 up = {0.0f, 0.0f, 1.0f};
+        return up;
+    }
+    float inv = 1.0f / len;
+    ShimVec3 r = {v.x * inv, v.y * inv, v.z * inv};
+    return r;
+}
+
+static int shim_obj_push_vec3(ShimVec3 **items, int *count, int *cap, ShimVec3 v) {
+    if (*count >= *cap) {
+        int next_cap = *cap > 0 ? *cap * 2 : 256;
+        ShimVec3 *next = (ShimVec3 *)realloc(*items, (size_t)next_cap * sizeof(ShimVec3));
+        if (!next) return 0;
+        *items = next;
+        *cap = next_cap;
+    }
+    (*items)[*count] = v;
+    *count += 1;
+    return 1;
+}
+
+static int shim_obj_push_vec2(ShimVec2 **items, int *count, int *cap, ShimVec2 v) {
+    if (*count >= *cap) {
+        int next_cap = *cap > 0 ? *cap * 2 : 256;
+        ShimVec2 *next = (ShimVec2 *)realloc(*items, (size_t)next_cap * sizeof(ShimVec2));
+        if (!next) return 0;
+        *items = next;
+        *cap = next_cap;
+    }
+    (*items)[*count] = v;
+    *count += 1;
+    return 1;
+}
+
+static int shim_obj_resolve_index(int idx, int count) {
+    if (idx > 0) return idx - 1;
+    if (idx < 0) return count + idx;
+    return -1;
+}
+
+static int shim_obj_parse_face_token(const char *tok, int *vi, int *ti, int *ni) {
+    char *end = NULL;
+    *vi = 0;
+    *ti = 0;
+    *ni = 0;
+    long v = strtol(tok, &end, 10);
+    if (end == tok) return 0;
+    *vi = (int)v;
+    if (*end == '/') {
+        const char *p = end + 1;
+        if (*p != '/') {
+            long t = strtol(p, &end, 10);
+            *ti = (int)t;
+        } else {
+            end = (char *)p;
+        }
+        if (*end == '/') {
+            p = end + 1;
+            long n = strtol(p, &end, 10);
+            *ni = (int)n;
+        }
+    }
+    return 1;
+}
+
+static int shim_obj_emit_corner(float *verts, uint16_t *indices,
+                                int *vc, int *ic, int max_verts, int max_indices,
+                                ShimVec3 p, ShimVec3 n, ShimVec2 uv) {
+    if (*vc >= max_verts || *ic >= max_indices) return 0;
+    int base = *vc * SHIM_MESH_FLOAT_STRIDE;
+    verts[base + 0] = p.x;
+    verts[base + 1] = p.y;
+    verts[base + 2] = p.z;
+    verts[base + 3] = n.x;
+    verts[base + 4] = n.y;
+    verts[base + 5] = n.z;
+    verts[base + 6] = uv.u;
+    verts[base + 7] = uv.v;
+    verts[base + 8] = 1.0f;
+    verts[base + 9] = 0.0f;
+    verts[base + 10] = 0.0f;
+    verts[base + 11] = 1.0f;
+    indices[*ic] = (uint16_t)*vc;
+    *vc += 1;
+    *ic += 1;
+    return 1;
+}
+
+int shim_load_obj(unsigned char *filename, float *verts, uint16_t *indices,
+                  int *vert_count, int *index_count,
+                  int max_verts, int max_indices) {
+    *vert_count = 0;
+    *index_count = 0;
+    FILE *f = fopen((const char *)filename, "r");
+    if (!f) return -1;
+
+    ShimVec3 *positions = NULL;
+    ShimVec2 *uvs = NULL;
+    ShimVec3 *normals = NULL;
+    int pos_count = 0, uv_count = 0, norm_count = 0;
+    int pos_cap = 0, uv_cap = 0, norm_cap = 0;
+    int vc = 0, ic = 0;
+    int ok = 1;
+    char line[1024];
+
+    while (ok && fgets(line, sizeof(line), f)) {
+        if (line[0] == 'v' && line[1] == ' ') {
+            ShimVec3 p = {0.0f, 0.0f, 0.0f};
+            if (sscanf(line + 2, "%f %f %f", &p.x, &p.y, &p.z) == 3) {
+                ok = shim_obj_push_vec3(&positions, &pos_count, &pos_cap, p);
+            }
+        } else if (line[0] == 'v' && line[1] == 't' && line[2] == ' ') {
+            ShimVec2 uv = {0.0f, 0.0f};
+            if (sscanf(line + 3, "%f %f", &uv.u, &uv.v) >= 2) {
+                ok = shim_obj_push_vec2(&uvs, &uv_count, &uv_cap, uv);
+            }
+        } else if (line[0] == 'v' && line[1] == 'n' && line[2] == ' ') {
+            ShimVec3 n = {0.0f, 0.0f, 1.0f};
+            if (sscanf(line + 3, "%f %f %f", &n.x, &n.y, &n.z) == 3) {
+                ok = shim_obj_push_vec3(&normals, &norm_count, &norm_cap,
+                                        shim_vec3_normalize(n));
+            }
+        } else if (line[0] == 'f' && line[1] == ' ') {
+            int vis[32], tis[32], nis[32];
+            int corner_count = 0;
+            char *tok = strtok(line + 2, " \t\r\n");
+            while (tok && corner_count < 32) {
+                if (shim_obj_parse_face_token(tok, &vis[corner_count],
+                                              &tis[corner_count],
+                                              &nis[corner_count])) {
+                    corner_count += 1;
+                }
+                tok = strtok(NULL, " \t\r\n");
+            }
+            if (corner_count < 3) continue;
+
+            for (int tri = 1; tri + 1 < corner_count; tri++) {
+                int cidx[3] = {0, tri, tri + 1};
+                ShimVec3 p[3];
+                ShimVec2 uv[3];
+                ShimVec3 n[3];
+                int has_normal[3] = {0, 0, 0};
+                int valid = 1;
+                for (int k = 0; k < 3; k++) {
+                    int ci = cidx[k];
+                    int pi = shim_obj_resolve_index(vis[ci], pos_count);
+                    int ui = shim_obj_resolve_index(tis[ci], uv_count);
+                    int ni = shim_obj_resolve_index(nis[ci], norm_count);
+                    if (pi < 0 || pi >= pos_count) {
+                        valid = 0;
+                        break;
+                    }
+                    p[k] = positions[pi];
+                    uv[k].u = 0.0f;
+                    uv[k].v = 0.0f;
+                    if (ui >= 0 && ui < uv_count) {
+                        uv[k] = uvs[ui];
+                    }
+                    n[k].x = 0.0f;
+                    n[k].y = 0.0f;
+                    n[k].z = 1.0f;
+                    if (ni >= 0 && ni < norm_count) {
+                        n[k] = normals[ni];
+                        has_normal[k] = 1;
+                    }
+                }
+                if (!valid) continue;
+
+                ShimVec3 face_n = shim_vec3_normalize(
+                    shim_vec3_cross(shim_vec3_sub(p[1], p[0]),
+                                    shim_vec3_sub(p[2], p[0])));
+                for (int k = 0; k < 3; k++) {
+                    if (!has_normal[k]) n[k] = face_n;
+                    ok = shim_obj_emit_corner(verts, indices, &vc, &ic,
+                                              max_verts, max_indices,
+                                              p[k], n[k], uv[k]);
+                    if (!ok) break;
+                }
+            }
+        }
+    }
+
+    fclose(f);
+    free(positions);
+    free(uvs);
+    free(normals);
+    *vert_count = vc;
+    *index_count = ic;
+    return ok ? 0 : -1;
 }
 
 /* ================================================================

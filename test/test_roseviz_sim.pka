@@ -92,7 +92,7 @@ export fn main() void = {
 	let sim_path = "./build/roseviz_falling_ball";
 	let sim_argv: [2]str = ["falling_ball", "--paused"];
 	let log_path = "/tmp/roseviz_falling_ball_test.log";
-	let pid = proc::MustCreateRedirect(sim_path, sim_argv[0z..2z], "", log_path, false, log_path, false);
+	let pid = proc::CreateRedirectAssert(sim_path, sim_argv[0z..2z], "", log_path, false, log_path, false);
 	assert(pid > 0, "spawn sim");
 
 	assert(wait_for_sim_data(&rt, app), "sim topics render");

@@ -1,0 +1,52 @@
+// test_robot_motion.pka — Verify rover IMU/VIO sampling from the robot shim.
+
+use fb;
+use strings;
+
+fn robot_motion_is_finite(x: f64) bool = {
+	return x == x && x > -1000000000.0f64 && x < 1000000000.0f64;
+};
+
+fn load_motion_sensor_model() bool = {
+	let p = strings::toutf8("models/motion_sensor.xml");
+	if (mj_shim_load(p.data) == 0) {
+		return true;
+	};
+	return false;
+};
+
+export fn main() void = {
+	fb::Printsln("=== test_robot_motion ===");
+
+	assert(load_motion_sensor_model(), "motion sensor model load");
+	assert(mj_shim_set_timestep(0.001f64) == 0, "set 1000 Hz timestep");
+	assert(mj_shim_motion_source_status() == 7, "frame body and imu sensors resolved");
+
+	let imu0: [7]f64 = [0.0...];
+	let vio0: [7]f64 = [0.0...];
+	assert(mj_shim_motion_sample(&imu0[0z], &vio0[0z]) == 0, "initial motion sample");
+	for (let i: size = 0z; i < 7z; i += 1z) {
+		assert(robot_motion_is_finite(imu0[i]), "initial imu finite");
+		assert(robot_motion_is_finite(vio0[i]), "initial vio finite");
+	};
+
+	for (let s: i32 = 0; s < 10; s += 1) {
+		mj_shim_step();
+	};
+
+	let imu1: [7]f64 = [0.0...];
+	let vio1: [7]f64 = [0.0...];
+	assert(mj_shim_motion_sample(&imu1[0z], &vio1[0z]) == 0, "post-step motion sample");
+	for (let i: size = 0z; i < 7z; i += 1z) {
+		assert(robot_motion_is_finite(imu1[i]), "post-step imu finite");
+		assert(robot_motion_is_finite(vio1[i]), "post-step vio finite");
+	};
+
+	assert(imu1[0z] > imu0[0z], "imu time advances");
+	assert(vio1[0z] > vio0[0z], "vio time advances");
+	assert(imu1[0z] > 0.009f64 && imu1[0z] < 0.011f64, "1000 Hz timestep timing");
+	assert(vio1[3z] > 0.1f64, "vio position z plausible");
+
+	mj_shim_free();
+	fb::Printsln("=== test_robot_motion passed ===");
+};

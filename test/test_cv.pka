@@ -8,7 +8,7 @@
 //   5. Region color at each object centroid matches model spec
 
 use fb;
-use fmt;
+use fb;
 
 // --- Centroid helpers: weighted center of color-dominant pixels ---
 
@@ -89,7 +89,7 @@ fn centroid_blue_y(pfb: *Framebuffer) i32 = {
 };
 
 export fn main() void = {
-	fmt::Printsln("=== test_cv ===");
+	fb::Printsln("=== test_cv ===");
 
 	// --- Setup: load model, init headless engine, create scene ---
 	let path: [20]u8 = ['m', 'o', 'd', 'e', 'l', 's', '/', 'b', 'a', 'l', 'l', '.', 'x', 'm', 'l', 0, 0, 0, 0, 0];
@@ -114,7 +114,7 @@ export fn main() void = {
 	let cam = freecam_from_orbit(&cam_orbit);
 
 	let tbuf: [256]u8 = [0...];
-	let tf = fmt::New(tbuf[0z..256z]);
+	let tf = fb::New(tbuf[0z..256z]);
 
 	// ========== Frame 0: initial state (ball at z=2, before physics) ==========
 	scene_update(&sc);
@@ -132,21 +132,21 @@ export fn main() void = {
 	let f0_bx = centroid_blue_x(&rt.fb);
 	let f0_by = centroid_blue_y(&rt.fb);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  f0: red=");
-	fmt::Wi64(&tf, f0_red_n: i64);
-	fmt::Write(&tf, " blue=");
-	fmt::Wi64(&tf, f0_blue_n: i64);
-	fmt::Write(&tf, " red_ctr=(");
-	fmt::Wi64(&tf, f0_rx: i64);
-	fmt::Write(&tf, ",");
-	fmt::Wi64(&tf, f0_ry: i64);
-	fmt::Write(&tf, ") blue_ctr=(");
-	fmt::Wi64(&tf, f0_bx: i64);
-	fmt::Write(&tf, ",");
-	fmt::Wi64(&tf, f0_by: i64);
-	fmt::Write(&tf, ")");
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  f0: red=");
+	fb::Wi64(&tf, f0_red_n: i64);
+	fb::Write(&tf, " blue=");
+	fb::Wi64(&tf, f0_blue_n: i64);
+	fb::Write(&tf, " red_ctr=(");
+	fb::Wi64(&tf, f0_rx: i64);
+	fb::Write(&tf, ",");
+	fb::Wi64(&tf, f0_ry: i64);
+	fb::Write(&tf, ") blue_ctr=(");
+	fb::Wi64(&tf, f0_bx: i64);
+	fb::Write(&tf, ",");
+	fb::Wi64(&tf, f0_by: i64);
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
 
 	// --- Test 1: colors present in initial frame ---
 	assert(f0_red_n > 10, "red ball visible");
@@ -155,16 +155,16 @@ export fn main() void = {
 	assert(f0_ry >= 0, "red centroid Y found");
 	assert(f0_bx >= 0, "blue centroid X found");
 	assert(f0_by >= 0, "blue centroid Y found");
-	fmt::Printsln("  test_colors_present: OK");
+	fb::Printsln("  test_colors_present: OK");
 
 	// --- Test 2: scene has substantial content (ground plane + objects) ---
 	let f0_bright = cv_count_bright(&rt.fb, 25);
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  f0: bright_pixels=");
-	fmt::Wi64(&tf, f0_bright: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  f0: bright_pixels=");
+	fb::Wi64(&tf, f0_bright: i64);
+	fb::Println(&tf);
 	assert(f0_bright > 2000, "scene has ground plane and objects");
-	fmt::Printsln("  test_scene_rendered: OK");
+	fb::Printsln("  test_scene_rendered: OK");
 
 	// --- Test 3: verify color at object centroids matches model ---
 	// Ball is red (0.8, 0.2, 0.2): region at centroid should be R-dominant
@@ -179,22 +179,22 @@ export fn main() void = {
 	assert(box_color.b > box_color.r, "box centroid: B > R");
 	assert(box_color.b > box_color.g, "box centroid: B > G");
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  ball_rgb=(");
-	fmt::Wf64(&tf, ball_color.r: f64, 2);
-	fmt::Write(&tf, ",");
-	fmt::Wf64(&tf, ball_color.g: f64, 2);
-	fmt::Write(&tf, ",");
-	fmt::Wf64(&tf, ball_color.b: f64, 2);
-	fmt::Write(&tf, ") box_rgb=(");
-	fmt::Wf64(&tf, box_color.r: f64, 2);
-	fmt::Write(&tf, ",");
-	fmt::Wf64(&tf, box_color.g: f64, 2);
-	fmt::Write(&tf, ",");
-	fmt::Wf64(&tf, box_color.b: f64, 2);
-	fmt::Write(&tf, ")");
-	fmt::Println(&tf);
-	fmt::Printsln("  test_centroid_colors: OK");
+	fb::Clear(&tf);
+	fb::Write(&tf, "  ball_rgb=(");
+	fb::Wf64(&tf, ball_color.r: f64, 2);
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, ball_color.g: f64, 2);
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, ball_color.b: f64, 2);
+	fb::Write(&tf, ") box_rgb=(");
+	fb::Wf64(&tf, box_color.r: f64, 2);
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, box_color.g: f64, 2);
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, box_color.b: f64, 2);
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
+	fb::Printsln("  test_centroid_colors: OK");
 
 	// ========== Step physics 200 times (0.4s — ball falling) ==========
 	for (let s1: i32 = 0; s1 < 200; s1 += 1) {
@@ -215,23 +215,23 @@ export fn main() void = {
 	let f1_bx = centroid_blue_x(&rt.fb);
 	let f1_by = centroid_blue_y(&rt.fb);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  f1: red=");
-	fmt::Wi64(&tf, f1_red_n: i64);
-	fmt::Write(&tf, " red_cy=");
-	fmt::Wi64(&tf, f1_ry: i64);
-	fmt::Write(&tf, " blue_ctr=(");
-	fmt::Wi64(&tf, f1_bx: i64);
-	fmt::Write(&tf, ",");
-	fmt::Wi64(&tf, f1_by: i64);
-	fmt::Write(&tf, ")");
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  f1: red=");
+	fb::Wi64(&tf, f1_red_n: i64);
+	fb::Write(&tf, " red_cy=");
+	fb::Wi64(&tf, f1_ry: i64);
+	fb::Write(&tf, " blue_ctr=(");
+	fb::Wi64(&tf, f1_bx: i64);
+	fb::Write(&tf, ",");
+	fb::Wi64(&tf, f1_by: i64);
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
 
 	// --- Test 4: ball fell — red centroid Y increased (lower on screen) ---
 	// In pixel coords, Y=0 is top. Ball dropping means higher Y.
 	assert(f1_ry > f0_ry, "ball fell: red centroid moved down");
 	assert(f1_red_n > 5, "ball still visible after falling");
-	fmt::Printsln("  test_ball_falls: OK");
+	fb::Printsln("  test_ball_falls: OK");
 
 	// --- Test 5: box stationary — blue centroid stable across frames ---
 	let dx1 = f1_bx - f0_bx;
@@ -239,16 +239,16 @@ export fn main() void = {
 	let dy1 = f1_by - f0_by;
 	if (dy1 < 0) { dy1 = 0 - dy1; };
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  box drift: dx=");
-	fmt::Wi64(&tf, dx1: i64);
-	fmt::Write(&tf, " dy=");
-	fmt::Wi64(&tf, dy1: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  box drift: dx=");
+	fb::Wi64(&tf, dx1: i64);
+	fb::Write(&tf, " dy=");
+	fb::Wi64(&tf, dy1: i64);
+	fb::Println(&tf);
 
 	assert(dx1 < 3, "box stable X");
 	assert(dy1 < 3, "box stable Y");
-	fmt::Printsln("  test_box_stationary: OK");
+	fb::Printsln("  test_box_stationary: OK");
 
 	// ========== Step physics 500 more (1.4s total — ball settled on ground) ==========
 	for (let s2: i32 = 0; s2 < 500; s2 += 1) {
@@ -268,19 +268,19 @@ export fn main() void = {
 	let f2_rx = centroid_red_x(&rt.fb);
 	let f2_ry = centroid_red_y(&rt.fb);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  f2: red=");
-	fmt::Wi64(&tf, f2_red_n: i64);
-	fmt::Write(&tf, " red_ctr=(");
-	fmt::Wi64(&tf, f2_rx: i64);
-	fmt::Write(&tf, ",");
-	fmt::Wi64(&tf, f2_ry: i64);
-	fmt::Write(&tf, ")");
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  f2: red=");
+	fb::Wi64(&tf, f2_red_n: i64);
+	fb::Write(&tf, " red_ctr=(");
+	fb::Wi64(&tf, f2_rx: i64);
+	fb::Write(&tf, ",");
+	fb::Wi64(&tf, f2_ry: i64);
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
 
 	// --- Test 6: ball settled lower than initial position ---
 	assert(f2_ry > f0_ry, "ball settled lower than start");
-	fmt::Printsln("  test_ball_settled: OK");
+	fb::Printsln("  test_ball_settled: OK");
 
 	// --- Test 7: settled ball centroid region is still red ---
 	let settled_color = cv_region_avg(&rt.fb,
@@ -288,20 +288,20 @@ export fn main() void = {
 	assert(settled_color.r > settled_color.g, "settled ball: R > G");
 	assert(settled_color.r > settled_color.b, "settled ball: R > B");
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  settled_rgb=(");
-	fmt::Wf64(&tf, settled_color.r: f64, 2);
-	fmt::Write(&tf, ",");
-	fmt::Wf64(&tf, settled_color.g: f64, 2);
-	fmt::Write(&tf, ",");
-	fmt::Wf64(&tf, settled_color.b: f64, 2);
-	fmt::Write(&tf, ")");
-	fmt::Println(&tf);
-	fmt::Printsln("  test_settled_color: OK");
+	fb::Clear(&tf);
+	fb::Write(&tf, "  settled_rgb=(");
+	fb::Wf64(&tf, settled_color.r: f64, 2);
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, settled_color.g: f64, 2);
+	fb::Write(&tf, ",");
+	fb::Wf64(&tf, settled_color.b: f64, 2);
+	fb::Write(&tf, ")");
+	fb::Println(&tf);
+	fb::Printsln("  test_settled_color: OK");
 
 	// --- Cleanup ---
 	scene_destroy(&sc);
 	mj_shim_free();
 	e2_runtime_shutdown(&rt);
-	fmt::Printsln("=== test_cv passed ===");
+	fb::Printsln("=== test_cv passed ===");
 };

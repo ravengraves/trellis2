@@ -539,6 +539,27 @@ export fn mesh_create_cylinder(slices: i32) Mesh = {
 	vert_count: *i32, index_count: *i32,
 	max_verts: i32, max_indices: i32) i32;
 
+@symbol("shim_load_obj") fn shim_load_obj(
+	filename: *u8, verts: *f32, indices: *u16,
+	vert_count: *i32, index_count: *i32,
+	max_verts: i32, max_indices: i32) i32;
+
+// Load a Wavefront OBJ with positions, UVs, normals, and polygon faces.
+// Intended for Blender static PBR props; materials are loaded separately.
+export fn mesh_load_obj(filename: *u8) Mesh = {
+	let m = mesh_init();
+	let rc = shim_load_obj(filename, &m.verts[0z], &m.indices[0z],
+		          &m.vert_count, &m.index_count,
+		          MAX_VERTS: i32, MAX_INDICES: i32);
+	if (rc != 0 || m.vert_count <= 0 || m.index_count <= 0) {
+		m.vert_count = 0;
+		m.index_count = 0;
+		return m;
+	};
+	mesh_generate_tangents(&m);
+	return m;
+};
+
 export fn mesh_load_stl(filename: *u8) Mesh = {
 	let m = mesh_init();
 	shim_load_stl(filename, &m.verts[0z], &m.indices[0z],

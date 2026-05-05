@@ -2,10 +2,10 @@
 // Loads ball.xml, steps physics, checks that the sphere falls under gravity.
 
 use fb;
-use fmt;
+use fb;
 
 export fn main() void = {
-	fmt::Printsln("=== test_physics ===");
+	fb::Printsln("=== test_physics ===");
 
 	// Load model
 	let path: [20]u8 = ['m', 'o', 'd', 'e', 'l', 's', '/', 'b', 'a', 'l', 'l', '.', 'x', 'm', 'l', 0, 0, 0, 0, 0];
@@ -14,10 +14,10 @@ export fn main() void = {
 
 	let ngeom = mj_shim_ngeom();
 	let tbuf: [256]u8 = [0...];
-	let tf = fmt::New(tbuf[0z..256z]);
-	fmt::Write(&tf, "  ngeom: ");
-	fmt::Wi64(&tf, ngeom: i64);
-	fmt::Println(&tf);
+	let tf = fb::New(tbuf[0z..256z]);
+	fb::Write(&tf, "  ngeom: ");
+	fb::Wi64(&tf, ngeom: i64);
+	fb::Println(&tf);
 	assert(ngeom >= 2, "at least 2 geoms");
 
 	// Find sphere geom (type=2)
@@ -33,10 +33,10 @@ export fn main() void = {
 	let pos0: [3]f32 = [0.0...];
 	mj_shim_geom_pos(sphere_idx, &pos0[0z]);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  initial z: ");
-	fmt::Wf64(&tf, pos0[2z]: f64, 4, "fix");
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  initial z: ");
+	fb::Wf64(&tf, pos0[2z]: f64, 4, "fix");
+	fb::Println(&tf);
 
 	// Step physics 500 times (1 second at 0.002s timestep)
 	for (let s: i32 = 0; s < 500; s += 1) {
@@ -47,10 +47,10 @@ export fn main() void = {
 	let pos1: [3]f32 = [0.0...];
 	mj_shim_geom_pos(sphere_idx, &pos1[0z]);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  final z: ");
-	fmt::Wf64(&tf, pos1[2z]: f64, 4, "fix");
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  final z: ");
+	fb::Wf64(&tf, pos1[2z]: f64, 4, "fix");
+	fb::Println(&tf);
 
 	// Sphere should have fallen (z decreased)
 	assert(pos1[2z] < pos0[2z], "sphere fell under gravity");
@@ -75,5 +75,5 @@ export fn main() void = {
 	assert(rgba[3z] > 0.9, "sphere alpha is ~1.0");
 
 	mj_shim_free();
-	fmt::Printsln("=== test_physics passed ===");
+	fb::Printsln("=== test_physics passed ===");
 };

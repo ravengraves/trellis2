@@ -35,15 +35,8 @@ def E2_PRIM_TRIS: i32 = 3;
 @symbol("shim_gl_begin_line")
 fn shim_gl_begin_line(mvp: *f32) void;
 
-@symbol("shim_gl_draw_mesh_handles")
-fn shim_gl_draw_mesh_handles(vbo: u32, ibo: u32, index_count: i32) void;
-
 @symbol("shim_gl_begin_wire")
 fn shim_gl_begin_wire(mvp: *f32, cr: f32, cg: f32, cb: f32, ca: f32) void;
-
-@symbol("shim_gl_draw_mesh_wire_handles")
-fn shim_gl_draw_mesh_wire_handles(vbo: u32, wire_ibo: u32,
-	wire_index_count: i32) void;
 
 @symbol("shim_gl_draw_color_handles")
 fn shim_gl_draw_color_handles(vbo: u32, vertex_count: i32,
@@ -89,6 +82,38 @@ export type E2GpuIbl = struct {
 	sharp: E2GpuTexture,
 	blur: E2GpuTexture,
 	valid: bool,
+};
+
+export type E2DustParams = struct {
+	dust_color: Color,
+	znear: f32,
+	zfar: f32,
+	start: f32,
+	end: f32,
+	falloff_distance: f32,
+	density: f32,
+	noise_strength: f32,
+	noise_scale: f32,
+	blur_px: f32,
+	time_sec: f32,
+};
+
+export type E2RadiationParams = struct {
+	density: f32,
+	min_value: f32,
+	max_value: f32,
+	seed: f32,
+};
+
+export type E2LaserGlareParams = struct {
+	x: f32,
+	y: f32,
+	radius: f32,
+	decay: f32,
+	hot_radius: f32,
+	hot_strength: f32,
+	glare_strength: f32,
+	streak_strength: f32,
 };
 
 export type E2Runtime = struct {
@@ -572,6 +597,41 @@ export fn e2_gpu_texture_create_rgba(data: []u8, w: i32, h: i32) E2GpuTexture = 
 	};
 };
 
+export fn e2_gpu_texture_load_png_rgb(path: *u8) E2GpuTexture = {
+	let w: i32 = 0;
+	let h: i32 = 0;
+	let handle = shim_gl_create_texture_from_png(path, 3, &w, &h);
+	return E2GpuTexture {
+		handle = handle,
+		width = w,
+		height = h,
+		valid = handle > 0u32,
+	};
+};
+
+export fn e2_gpu_texture_load_png_rgba(path: *u8) E2GpuTexture = {
+	let w: i32 = 0;
+	let h: i32 = 0;
+	let handle = shim_gl_create_texture_from_png(path, 4, &w, &h);
+	return E2GpuTexture {
+		handle = handle,
+		width = w,
+		height = h,
+		valid = handle > 0u32,
+	};
+};
+
+export fn e2_gpu_depth_texture_create(data: []f32,
+	w: i32, h: i32, znear: f32, zfar: f32) E2GpuTexture = {
+	let handle = shim_gl_create_depth_texture_f32(data.data, w, h, znear, zfar);
+	return E2GpuTexture {
+		handle = handle,
+		width = w,
+		height = h,
+		valid = handle > 0u32,
+	};
+};
+
 export fn e2_gpu_texture_update_rgb(tex: *E2GpuTexture, data: []u8) void = {
 	if (!tex.valid) { return; };
 	shim_gl_update_texture_rgb(tex.handle, data.data, tex.width, tex.height);
@@ -588,6 +648,13 @@ export fn e2_gpu_ibl_update_rgb(ibl: *E2GpuIbl, data: []u8) void = {
 export fn e2_gpu_texture_update_rgba(tex: *E2GpuTexture, data: []u8) void = {
 	if (!tex.valid) { return; };
 	shim_gl_update_texture_rgba(tex.handle, data.data, tex.width, tex.height);
+};
+
+export fn e2_gpu_depth_texture_update(tex: *E2GpuTexture,
+	data: []f32, znear: f32, zfar: f32) void = {
+	if (!tex.valid) { return; };
+	shim_gl_update_depth_texture_f32(tex.handle, data.data,
+		tex.width, tex.height, znear, zfar);
 };
 
 export fn e2_gpu_ibl_destroy(ibl: *E2GpuIbl) void = {
@@ -649,6 +716,56 @@ export fn e2_init_blit_shader() bool = {
 	return shim_gl_init_embedded_blit_shader() == 0;
 };
 
+export fn e2_init_dust_shader() bool = {
+	return shim_gl_init_embedded_dust_shader() == 0;
+};
+
+export fn e2_init_radiation_shader() bool = {
+	return shim_gl_init_embedded_radiation_shader() == 0;
+};
+
+export fn e2_init_laser_glare_shader() bool = {
+	return shim_gl_init_embedded_laser_glare_shader() == 0;
+};
+
+export fn e2_dust_params_default(znear: f32, zfar: f32) E2DustParams = {
+	return E2DustParams {
+		dust_color = color_new(0.74, 0.62, 0.42, 1.0),
+		znear = znear,
+		zfar = zfar,
+		start = znear,
+		end = zfar,
+		falloff_distance = 0.0,
+		density = 1.0,
+		noise_strength = 0.04,
+		noise_scale = 180.0,
+		blur_px = 1.5,
+		time_sec = 0.0,
+	};
+};
+
+export fn e2_radiation_params_default() E2RadiationParams = {
+	return E2RadiationParams {
+		density = 0.002,
+		min_value = 0.70,
+		max_value = 1.0,
+		seed = 0.0,
+	};
+};
+
+export fn e2_laser_glare_params_default() E2LaserGlareParams = {
+	return E2LaserGlareParams {
+		x = 0.5,
+		y = 0.5,
+		radius = 0.18,
+		decay = 2.0,
+		hot_radius = 0.16,
+		hot_strength = 1.0,
+		glare_strength = 0.85,
+		streak_strength = 0.45,
+	};
+};
+
 // Draw a GPU texture as a 2D overlay at pixel position (x, y) with size (w, h).
 export fn e2_pass_2d_texture(rt: *E2Runtime, tex: *E2GpuTexture,
 	x: i32, y: i32, w: i32, h: i32) void = {
@@ -660,6 +777,83 @@ export fn e2_pass_2d_texture(rt: *E2Runtime, tex: *E2GpuTexture,
 	if (sw <= 0 || sh <= 0) { return; };
 	shim_gl_draw_textured_quad(tex.handle,
 		x: f32, y: f32, w: f32, h: f32, sw, sh);
+};
+
+// Draw a GPU texture as a repeated 2D overlay. tiles_x/tiles_y specify how
+// many texture repeats fit across the destination rectangle.
+export fn e2_pass_2d_texture_tiled(rt: *E2Runtime, tex: *E2GpuTexture,
+	x: i32, y: i32, w: i32, h: i32, tiles_x: f32, tiles_y: f32) void = {
+	if (!tex.valid) { return; };
+	if (!e2_init_blit_shader()) { return; };
+	let sw: i32 = 0;
+	let sh: i32 = 0;
+	e2_target_dims(rt, &sw, &sh);
+	if (sw <= 0 || sh <= 0) { return; };
+	shim_gl_draw_textured_quad_tiled(tex.handle,
+		x: f32, y: f32, w: f32, h: f32, sw, sh, tiles_x, tiles_y);
+};
+
+export fn e2_pass_dust(rt: *E2Runtime,
+	color_tex: *E2GpuTexture,
+	depth_tex: *E2GpuTexture,
+	params: *E2DustParams) void = {
+	if (!color_tex.valid || !depth_tex.valid) { return; };
+	if (!e2_init_dust_shader()) { return; };
+	let sw: i32 = 0;
+	let sh: i32 = 0;
+	e2_target_dims(rt, &sw, &sh);
+	if (sw <= 0 || sh <= 0) { return; };
+	shim_gl_draw_dust_quad(
+		color_tex.handle, depth_tex.handle,
+		0.0, 0.0, sw: f32, sh: f32,
+		sw, sh,
+		params.dust_color.r, params.dust_color.g, params.dust_color.b,
+		params.znear, params.zfar,
+		params.start, params.end, params.falloff_distance, params.density,
+		params.noise_strength, params.noise_scale,
+		params.blur_px, params.time_sec);
+};
+
+export fn e2_pass_radiation(rt: *E2Runtime,
+	tex: *E2GpuTexture,
+	params: *E2RadiationParams) void = {
+	if (!tex.valid) { return; };
+	if (!e2_init_radiation_shader()) { return; };
+	let sw: i32 = 0;
+	let sh: i32 = 0;
+	e2_target_dims(rt, &sw, &sh);
+	if (sw <= 0 || sh <= 0) { return; };
+	shim_gl_draw_radiation_quad(
+		tex.handle,
+		0.0, 0.0, sw: f32, sh: f32,
+		sw, sh,
+		params.density,
+		params.min_value,
+		params.max_value,
+		params.seed);
+};
+
+export fn e2_pass_laser_glare(rt: *E2Runtime,
+	tex: *E2GpuTexture,
+	params: *E2LaserGlareParams) void = {
+	if (!tex.valid) { return; };
+	if (!e2_init_laser_glare_shader()) { return; };
+	let sw: i32 = 0;
+	let sh: i32 = 0;
+	e2_target_dims(rt, &sw, &sh);
+	if (sw <= 0 || sh <= 0) { return; };
+	shim_gl_draw_laser_glare_quad(
+		tex.handle,
+		0.0, 0.0, sw: f32, sh: f32,
+		sw, sh,
+		params.x,
+		params.y,
+		params.radius,
+		params.decay,
+		params.hot_radius,
+		params.hot_strength,
+		params.glare_strength,
+		params.streak_strength);
 };
 
 export fn e2_text_add(rt: *E2Runtime, x_frac: f32, y_frac: f32,

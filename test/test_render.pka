@@ -2,7 +2,7 @@
 // Loads ball.xml, inits engine headless, renders one frame, checks pixels.
 
 use fb;
-use fmt;
+use fb;
 
 fn count_nonblack_rgb(pixels: []u8) i32 = {
 	let n: i32 = 0;
@@ -37,7 +37,7 @@ fn count_rgb_range(pixels: []u8,
 };
 
 export fn main() void = {
-	fmt::Printsln("=== test_render ===");
+	fb::Printsln("=== test_render ===");
 
 	// Load model
 	let path: [20]u8 = ['m', 'o', 'd', 'e', 'l', 's', '/', 'b', 'a', 'l', 'l', '.', 'x', 'm', 'l', 0, 0, 0, 0, 0];
@@ -58,10 +58,10 @@ export fn main() void = {
 	scene_geom_pass(&sc, &geom_pass);
 
 	let tbuf: [128]u8 = [0...];
-	let tf = fmt::New(tbuf[0z..128z]);
-	fmt::Write(&tf, "  geom draws: ");
-	fmt::Wi64(&tf, geom_pass.count: i64);
-	fmt::Println(&tf);
+	let tf = fb::New(tbuf[0z..128z]);
+	fb::Write(&tf, "  geom draws: ");
+	fb::Wi64(&tf, geom_pass.count: i64);
+	fb::Println(&tf);
 	assert(geom_pass.count > 0, "geom draws > 0");
 
 	// Create grid lines
@@ -93,12 +93,12 @@ export fn main() void = {
 	let nbytes: size = (npixels * 3): size;
 	let colored = count_nonblack_rgb(rt.fb.pixels[0z..nbytes]);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  non-black pixels: ");
-	fmt::Wi64(&tf, colored: i64);
-	fmt::Write(&tf, " / ");
-	fmt::Wi64(&tf, npixels: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  non-black pixels: ");
+	fb::Wi64(&tf, colored: i64);
+	fb::Write(&tf, " / ");
+	fb::Wi64(&tf, npixels: i64);
+	fb::Println(&tf);
 
 	// Verify something was rendered
 	assert(colored > 100, "frame has rendered content");
@@ -120,12 +120,12 @@ export fn main() void = {
 		i = i + 3z;
 	};
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  red pixels: ");
-	fmt::Wi64(&tf, red_pixels: i64);
-	fmt::Write(&tf, ", blue pixels: ");
-	fmt::Wi64(&tf, blue_pixels: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  red pixels: ");
+	fb::Wi64(&tf, red_pixels: i64);
+	fb::Write(&tf, ", blue pixels: ");
+	fb::Wi64(&tf, blue_pixels: i64);
+	fb::Println(&tf);
 
 	assert(geom_pass.count >= 3, "scene has expected test geoms");
 	geom_pass.draws[0z].material = material_flat(color_yellow());
@@ -151,14 +151,14 @@ export fn main() void = {
 		0u8, 15u8,
 		240u8, 255u8);
 
-	fmt::Clear(&tf);
-	fmt::Write(&tf, "  constant pass yellow: ");
-	fmt::Wi64(&tf, yellow_pixels: i64);
-	fmt::Write(&tf, ", green: ");
-	fmt::Wi64(&tf, green_pixels: i64);
-	fmt::Write(&tf, ", blue: ");
-	fmt::Wi64(&tf, blue_const_pixels: i64);
-	fmt::Println(&tf);
+	fb::Clear(&tf);
+	fb::Write(&tf, "  constant pass yellow: ");
+	fb::Wi64(&tf, yellow_pixels: i64);
+	fb::Write(&tf, ", green: ");
+	fb::Wi64(&tf, green_pixels: i64);
+	fb::Write(&tf, ", blue: ");
+	fb::Wi64(&tf, blue_const_pixels: i64);
+	fb::Println(&tf);
 
 	assert(yellow_pixels > 500, "constant pass renders exact yellow plane");
 	assert(green_pixels > 20, "constant pass renders exact green sphere");
@@ -169,5 +169,5 @@ export fn main() void = {
 	e2_gpu_color_destroy(&line_gpu);
 	mj_shim_free();
 	e2_runtime_shutdown(&rt);
-	fmt::Printsln("=== test_render passed ===");
+	fb::Printsln("=== test_render passed ===");
 };

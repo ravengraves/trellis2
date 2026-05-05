@@ -13,6 +13,11 @@ export fn util_mesh_load_stl_upload(path: *u8, target_triangles: i32) E2GpuMesh 
 	return util_mesh_upload(&m);
 };
 
+export fn util_mesh_load_obj_upload(path: *u8) E2GpuMesh = {
+	let m = mesh_load_obj(path);
+	return util_mesh_upload(&m);
+};
+
 export fn util_color_upload(buf: *E2CpuColorVertexBuffer) E2GpuColorBuffer = {
 	let s = util_cpu_color_buffer_slice(buf);
 	return e2_gpu_color_create(s);
