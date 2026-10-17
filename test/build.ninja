@@ -2,7 +2,7 @@
 rule pika_tests
   command = mkdir -p build && for name in $names; do $
     echo "BUILD test_$$name"; $
-    $pikacc $sources test/test_$$name.pka $shims $pikaflags --cc "$cc" --platform libc -o build/test_$$name -- $cc_args $system_libs || exit $$?; $
+    $pikacc $sources test/test_$$name.pka $shims $pikaflags --cc "$cc" --platform libc -o build/test_$$name -- $pika_cflags $cc_args $system_libs || exit $$?; $
     done
   pool = console
 

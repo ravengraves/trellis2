@@ -13,6 +13,7 @@ mujoco_dir = $${MUJOCO_DIR:-vendor/mujoco}
 mujoco_lib_dir = $${MUJOCO_LIB_DIR:-$mujoco_dir/build/lib}
 cflags = $${CFLAGS:--O3 -std=c11 -Wall -Wextra -Werror}
 pikaflags = $${PIKAFLAGS--R}
+pika_cflags = -Wno-float-conversion
 gl_libs = $${GL_LIBS:--lglfw -lGLESv2 -lEGL}
 system_libs = -lrt -lm -lpthread -ldl -lstdc++
 rose_cflags = $${ROSE_CFLAGS:--I"$rose_prefix/include"}
@@ -91,7 +92,7 @@ build build/bindings.stamp: source_stamp $
 physics_flags = $engine_cflags $mujoco_cflags $mujoco_libs $gl_libs
 
 rule pika
-  command = mkdir -p build && $pikacc $sources $pikaflags --cc "$cc" --platform libc -o $out -- $cc_args $system_libs
+  command = mkdir -p build && $pikacc $sources $pikaflags --cc "$cc" --platform libc -o $out -- $pika_cflags $cc_args $system_libs
   pool = console
 
 # Check the nested build each time; only changed libraries invalidate consumers.
