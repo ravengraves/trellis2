@@ -1,0 +1,202 @@
+<mujoco model="four_wheel_robot_markers">
+  <!-- Simulation options -->
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+
+  <!-- Visual appearance -->
+  <visual>
+    <map force="0.1" zfar="30"/>
+    <global offwidth="1024" offheight="768" elevation="-20" azimuth="120"/>
+  </visual>
+
+  <!-- Assets -->
+  <asset>
+    <!-- Ground texture -->
+    <texture name="ground" type="2d" file="dirt.png"/>
+    <material name="ground_mat" texture="ground" texrepeat="120 120" texuniform="true"
+              reflectance=".2"/>
+    <material name="dirt_capsule_mat" texture="ground" texrepeat="1 1" texuniform="true"
+              rgba="0.47 0.31 0.22 1" reflectance=".1"/>
+
+    <!-- Frame material (white) -->
+    <texture name="frame" type="cube" builtin="flat" mark="cross"
+             width="128" height="128" rgb1="1 1 1" rgb2="1 1 1"
+             markrgb="1 1 1" random="0.01"/>
+    <material name="frame_mat" texture="frame" texuniform="true"
+              rgba="1 1 1 1"/>
+
+    <!-- Wheel material (gray) -->
+    <texture name="wheel" type="cube" builtin="flat" mark="cross"
+             width="128" height="128" rgb1=".5 .5 .5" rgb2=".5 .5 .5"
+             markrgb="1 1 1" random="0.01"/>
+    <material name="wheel_mat" texture="wheel" texuniform="true"
+              rgba=".5 .5 .5 1"/>
+
+    <!-- Rear wheel accent materials -->
+    <material name="wheel_blue_mat" rgba="0.2 0.4 1 1"/>
+    <material name="wheel_red_mat" rgba="1 0.2 0.2 1"/>
+
+    <!-- Marker pole material -->
+    <material name="marker_pole_mat" rgba="0.65 0.65 0.65 1"/>
+
+    <!-- Light source texture (unused but kept for consistency) -->
+    <texture name="light" type="cube" builtin="flat" mark="cross"
+             width="128" height="128" rgb1="1 1 1" rgb2="1 1 1"
+             markrgb="1 1 1" random="0.01"/>
+    <material name="light_mat" texture="light" texuniform="true"
+              rgba="1 1 1 1"/>
+  </asset>
+
+  <!-- Default actuator properties -->
+  <default>
+    <motor ctrlrange="-0.3 0.3" ctrllimited="true"/>
+    <joint type="hinge" damping=".02" stiffness="0" armature=".01"
+           limited="false"/>
+    <geom density="230"/>
+  </default>
+
+  <!-- Ground -->
+  <worldbody>
+    <geom name="ground" size="0 0 .05" type="plane" material="ground_mat"/>
+
+    <!-- Fixed marker supports and invisible collision proxies. The textured
+         ArUco cubes are rendered by robot_sim from OBJ+PNG assets. -->
+    <geom name="marker0_pole" type="capsule" size="0.05"
+          fromto="-7.5 10 0 -7.5 10 0.32" material="marker_pole_mat"
+          friction="0.8 0.02 0.002"/>
+    <geom name="marker0_collision" type="capsule" size="0.15"
+          fromto="-7.5 10 0.47 -7.5 10 0.53" rgba="0 0 0 0"
+          friction="0.8 0.02 0.002"/>
+
+    <geom name="marker1_pole" type="capsule" size="0.05"
+          fromto="-2.5 10 0 -2.5 10 0.487" material="marker_pole_mat"
+          friction="0.8 0.02 0.002"/>
+    <geom name="marker1_collision" type="capsule" size="0.15"
+          fromto="-2.5 10 0.637 -2.5 10 0.697" rgba="0 0 0 0"
+          friction="0.8 0.02 0.002"/>
+
+    <geom name="marker2_pole" type="capsule" size="0.05"
+          fromto="2.5 10 0 2.5 10 0.653" material="marker_pole_mat"
+          friction="0.8 0.02 0.002"/>
+    <geom name="marker2_collision" type="capsule" size="0.15"
+          fromto="2.5 10 0.803 2.5 10 0.863" rgba="0 0 0 0"
+          friction="0.8 0.02 0.002"/>
+
+    <geom name="marker3_pole" type="capsule" size="0.05"
+          fromto="7.5 10 0 7.5 10 0.82" material="marker_pole_mat"
+          friction="0.8 0.02 0.002"/>
+    <geom name="marker3_collision" type="capsule" size="0.15"
+          fromto="7.5 10 0.97 7.5 10 1.03" rgba="0 0 0 0"
+          friction="0.8 0.02 0.002"/>
+
+    <!-- Frame and wheels -->
+    <body name="frame" pos="0 0 0.9">
+      <freejoint name="root"/>
+
+      <!-- Frame geometry: 0.8m x 0.8m, density set for ~20kg frame mass -->
+      <geom name="frame_body" type="box" size="0.4 0.4 0.05"
+            material="frame_mat" density="312.5"/>
+
+      <!-- Frame corner sites for spring-dampers -->
+      <site name="frame_front_left_corner" pos="0.4 0.4 0" size="0.01"/>
+      <site name="frame_front_right_corner" pos="-0.4 0.4 0" size="0.01"/>
+      <site name="frame_rear_left_corner" pos="0.4 -0.4 0" size="0.01"/>
+      <site name="frame_rear_right_corner" pos="-0.4 -0.4 0" size="0.01"/>
+
+      <!-- Pivoting arms at left/right midpoints -->
+      <body name="arm_left" pos="0.4 0 0">
+        <joint name="arm_left_pivot" type="hinge" axis="1 0 0"/>
+        <site name="leg_left_front_mid" pos="0 0.1591 -0.1591" size="0.01"/>
+        <site name="leg_left_rear_mid" pos="0 -0.1591 -0.1591" size="0.01"/>
+        <geom name="leg_left_front" type="capsule" size="0.02"
+              fromto="0 0 0 0 0.3182 -0.3182" material="frame_mat"
+              density="668"/>
+        <geom name="leg_left_rear" type="capsule" size="0.02"
+              fromto="0 0 0 0 -0.3182 -0.3182" material="frame_mat"
+              density="668"/>
+
+        <!-- Left wheels attached to left arm -->
+        <body name="wheel_fl" pos="0 0.3182 -0.3182" euler="0 0 90">
+          <joint name="wheel_fl_joint" axis="0 1 0"/>
+          <geom name="wheel_fl_geom" type="cylinder"
+                size="0.0762 0.05" material="wheel_mat" euler="90 0 0"
+                friction="0.3 0.01 0.001" density="274"/>
+        </body>
+
+        <body name="wheel_rl" pos="0 -0.3182 -0.3182" euler="0 0 90">
+          <joint name="wheel_rl_joint" axis="0 1 0" frictionloss="0.05"/>
+          <geom name="wheel_rl_geom" type="cylinder"
+                size="0.0762 0.05" material="wheel_red_mat" euler="90 0 0"
+                friction="0.3 0.01 0.001" density="274"/>
+        </body>
+      </body>
+      <body name="arm_right" pos="-0.4 0 0">
+        <joint name="arm_right_pivot" type="hinge" axis="1 0 0"/>
+        <site name="leg_right_front_mid" pos="0 0.1591 -0.1591" size="0.01"/>
+        <site name="leg_right_rear_mid" pos="0 -0.1591 -0.1591" size="0.01"/>
+        <geom name="leg_right_front" type="capsule" size="0.02"
+              fromto="0 0 0 0 0.3182 -0.3182" material="frame_mat"
+              density="668"/>
+        <geom name="leg_right_rear" type="capsule" size="0.02"
+              fromto="0 0 0 0 -0.3182 -0.3182" material="frame_mat"
+              density="668"/>
+
+        <!-- Right wheels attached to right arm -->
+        <body name="wheel_fr" pos="0 0.3182 -0.3182" euler="0 0 90">
+          <joint name="wheel_fr_joint" axis="0 1 0"/>
+          <geom name="wheel_fr_geom" type="cylinder"
+                size="0.0762 0.05" material="wheel_mat" euler="90 0 0"
+                friction="0.3 0.01 0.001" density="274"/>
+        </body>
+
+        <body name="wheel_rr" pos="0 -0.3182 -0.3182" euler="0 0 90">
+          <joint name="wheel_rr_joint" axis="0 1 0" frictionloss="0.05"/>
+          <geom name="wheel_rr_geom" type="cylinder"
+                size="0.0762 0.05" material="wheel_blue_mat" euler="90 0 0"
+                friction="0.3 0.01 0.001" density="274"/>
+        </body>
+      </body>
+    </body>
+
+    <!-- Spot light to illuminate the robot -->
+    <!-- <geom name="rock_obstacle"
+          type="capsule"
+          fromto="-0.25 2.85 0.14 0.25 2.85 0.14"
+          size="0.28"
+          material="dirt_capsule_mat"
+          friction="0.9 0.02 0.002"/> -->
+
+    <light name="main_light" pos="0 0 3" dir="0 0 -1"
+           diffuse=".8 .8 .8" specular="0.3 0.3 0.3"
+           attenuation="1 0 0" cutoff="45"/>
+  </worldbody>
+
+  <!-- Spring-dampers from frame corners to leg midpoints -->
+  <tendon>
+    <spatial name="sd_front_left" stiffness="200" damping="5" springlength="0.2887"
+             limited="true" range="0.2387 0.3387">
+      <site site="frame_front_left_corner"/>
+      <site site="leg_left_front_mid"/>
+    </spatial>
+    <spatial name="sd_front_right" stiffness="200" damping="5" springlength="0.2887"
+             limited="true" range="0.2387 0.3387">
+      <site site="frame_front_right_corner"/>
+      <site site="leg_right_front_mid"/>
+    </spatial>
+    <spatial name="sd_rear_left" stiffness="200" damping="5" springlength="0.2887"
+             limited="true" range="0.2387 0.3387">
+      <site site="frame_rear_left_corner"/>
+      <site site="leg_left_rear_mid"/>
+    </spatial>
+    <spatial name="sd_rear_right" stiffness="200" damping="5" springlength="0.2887"
+             limited="true" range="0.2387 0.3387">
+      <site site="frame_rear_right_corner"/>
+      <site site="leg_right_rear_mid"/>
+    </spatial>
+  </tendon>
+
+  <!-- Actuators -->
+  <actuator>
+    <motor name="rear_right_wheel" gear="25" joint="wheel_rr_joint"/>
+    <motor name="rear_left_wheel" gear="25" joint="wheel_rl_joint"/>
+  </actuator>
+</mujoco>
