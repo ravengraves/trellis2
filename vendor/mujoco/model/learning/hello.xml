@@ -1,0 +1,40 @@
+<mujoco model="HelloMuJoCo">
+<!-- Visual Parameters -->
+<visual>
+    <map force="0.1" zfar="30"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global offwidth="2560" offheight="1440" elevation="-20" azimuth="120"/>
+</visual>
+
+<!-- Defaults -->
+<default>
+	<motor ctrlrange="-1 1" ctrllimited="true"/>
+	<geom friction=".7" solimp=".9 .99 .003" solref=".015 1"/>
+	<joint damping=".2" armature=".01" solimplimit="0 .99 .01"/>
+</default>
+
+<!-- Model -->
+<worldbody>
+	<geom name="floor" size="0 0 .05" type="plane" condim="3"/>
+	<light directional="false" diffuse=".8 .8 .8" specular=".2 .2 .2" pos="0 0 5" dir="0 0 -1"/>
+	<body name="Chassis" pos="0 0 .295">
+		<freejoint/>
+		<geom type="capsule" fromto="-0.3 0 0 0.1 0 0" size="0.1"/>
+
+	<body name="L_Wheel" pos="0 0.1 0">
+		<joint name="L_Wheel_Joint" type="hinge"  axis="0 1 0"/>
+		<geom name="L_Wheel_Geom" type="cylinder" fromto="0 0.1 0 0 0.2 0" size="0.2"/>
+	</body>
+	<body name="R_Wheel" pos="0 -0.1 0">
+		<joint name="R_Wheel_Joint" type="hinge"  axis="0 -1 0"/>
+		<geom name="R_Wheel_Geom" type="cylinder" fromto="0 -0.1 0 0 -0.2 0" size="0.2"/>
+	</body>
+
+	</body>
+</worldbody>
+
+<actuator>
+	<motor name="L_Motor" gear="64" joint="L_Wheel_Joint"/>
+	<motor name="R_Motor" gear="64" joint="R_Wheel_Joint"/>
+</actuator>
+</mujoco>

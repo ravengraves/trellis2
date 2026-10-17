@@ -1,0 +1,304 @@
+ninja_required_version = 1.7
+
+mujoco_dir = .
+out_dir = build
+obj_dir = $out_dir/obj
+lib_dir = $out_dir/lib
+gen_dir = $out_dir/generated
+
+cc = cc
+cxx = c++
+ar = ar
+
+common_opt = -O3 -fPIC -fdata-sections -ffunction-sections
+core_defs = -DCCD_STATIC_DEFINE -DMUJOCO_DLL_EXPORTS -DMUJOCO_TINYOBJLOADER_IMPL -D_GNU_SOURCE -DmjUSEPLATFORMSIMD -DNDEBUG
+core_warn = -Werror -Wall -Wimplicit-fallthrough -Wunused -Wno-int-in-bool-context -Wno-sign-compare -Wno-unknown-pragmas -Wimplicit-fallthrough=5 -Wno-maybe-uninitialized
+core_incs = -I$mujoco_dir/include -I$mujoco_dir/src -I$mujoco_dir/dependencies/ccd/src -I$gen_dir -I$mujoco_dir/dependencies/lodepng -I$mujoco_dir/dependencies/qhull/src/libqhull_r -I$mujoco_dir/dependencies/tinyobjloader -I$mujoco_dir/dependencies/tinyxml2
+core_cflags = -std=c11 -fvisibility=hidden
+core_cxxflags = -std=c++17 -fvisibility=hidden -fvisibility-inlines-hidden
+
+dep_defs = -DNDEBUG
+dep_cflags =
+dep_cxxflags =
+dep_incs =
+
+rule core_cc_compile
+  command = bash -c 'mkdir -p "$$(dirname "$out")" && $cc $core_defs $common_opt $core_warn $core_cflags $core_incs -MMD -MF "$out.d" -c "$in" -o "$out"'
+  depfile = $out.d
+  deps = gcc
+  description = CC $out
+
+rule core_cxx_compile
+  command = bash -c 'mkdir -p "$$(dirname "$out")" && $cxx $core_defs $common_opt $core_warn $core_cxxflags $core_incs -MMD -MF "$out.d" -c "$in" -o "$out"'
+  depfile = $out.d
+  deps = gcc
+  description = CXX $out
+
+rule dep_cc_compile
+  command = bash -c 'mkdir -p "$$(dirname "$out")" && $cc $dep_defs $common_opt $dep_cflags $dep_incs -MMD -MF "$out.d" -c "$in" -o "$out"'
+  depfile = $out.d
+  deps = gcc
+  description = DEP-CC $out
+
+rule dep_cxx_compile
+  command = bash -c 'mkdir -p "$$(dirname "$out")" && $cxx $dep_defs $common_opt $dep_cxxflags $dep_incs -MMD -MF "$out.d" -c "$in" -o "$out"'
+  depfile = $out.d
+  deps = gcc
+  description = DEP-CXX $out
+
+rule archive
+  command = bash -c 'mkdir -p "$$(dirname "$out")" && rm -f "$out" && $ar rcs "$out" $in'
+  description = AR $out
+
+rule gen_ccd_config
+  command = bash -c 'mkdir -p "$$(dirname "$out")" && printf "#ifndef __CCD_CONFIG_H__\n#define __CCD_CONFIG_H__\n\n#define CCD_SINGLE\n/* #undef CCD_DOUBLE */\n\n#endif /* __CCD_CONFIG_H__ */\n" > "$out"'
+  description = GEN $out
+
+build $gen_dir/ccd/config.h: gen_ccd_config
+
+# ccd
+build $obj_dir/deps/ccd/ccd.c.o: dep_cc_compile $mujoco_dir/dependencies/ccd/src/ccd.c | $gen_dir/ccd/config.h
+  dep_incs = -I$mujoco_dir/dependencies/ccd/src -I$gen_dir
+  dep_cflags = -fvisibility=hidden
+  dep_defs = -DCCD_STATIC_DEFINE -DNDEBUG
+build $obj_dir/deps/ccd/mpr.c.o: dep_cc_compile $mujoco_dir/dependencies/ccd/src/mpr.c | $gen_dir/ccd/config.h
+  dep_incs = -I$mujoco_dir/dependencies/ccd/src -I$gen_dir
+  dep_cflags = -fvisibility=hidden
+  dep_defs = -DCCD_STATIC_DEFINE -DNDEBUG
+build $obj_dir/deps/ccd/polytope.c.o: dep_cc_compile $mujoco_dir/dependencies/ccd/src/polytope.c | $gen_dir/ccd/config.h
+  dep_incs = -I$mujoco_dir/dependencies/ccd/src -I$gen_dir
+  dep_cflags = -fvisibility=hidden
+  dep_defs = -DCCD_STATIC_DEFINE -DNDEBUG
+build $obj_dir/deps/ccd/support.c.o: dep_cc_compile $mujoco_dir/dependencies/ccd/src/support.c | $gen_dir/ccd/config.h
+  dep_incs = -I$mujoco_dir/dependencies/ccd/src -I$gen_dir
+  dep_cflags = -fvisibility=hidden
+  dep_defs = -DCCD_STATIC_DEFINE -DNDEBUG
+build $obj_dir/deps/ccd/vec3.c.o: dep_cc_compile $mujoco_dir/dependencies/ccd/src/vec3.c | $gen_dir/ccd/config.h
+  dep_incs = -I$mujoco_dir/dependencies/ccd/src -I$gen_dir
+  dep_cflags = -fvisibility=hidden
+  dep_defs = -DCCD_STATIC_DEFINE -DNDEBUG
+build $lib_dir/libccd.a: archive $obj_dir/deps/ccd/ccd.c.o $obj_dir/deps/ccd/mpr.c.o $obj_dir/deps/ccd/polytope.c.o $obj_dir/deps/ccd/support.c.o $obj_dir/deps/ccd/vec3.c.o
+
+# tinyxml2
+build $obj_dir/deps/tinyxml2/tinyxml2.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/tinyxml2/tinyxml2.cpp
+  dep_incs = -I$mujoco_dir/dependencies/tinyxml2
+  dep_cxxflags = -std=c++17
+build $lib_dir/libtinyxml2.a: archive $obj_dir/deps/tinyxml2/tinyxml2.cpp.o
+
+# tinyobjloader
+build $obj_dir/deps/tinyobjloader/tiny_obj_loader.cc.o: dep_cxx_compile $mujoco_dir/dependencies/tinyobjloader/tiny_obj_loader.cc
+  dep_incs = -I$mujoco_dir/dependencies/tinyobjloader
+  dep_cxxflags = -std=c++17
+build $lib_dir/libtinyobjloader.a: archive $obj_dir/deps/tinyobjloader/tiny_obj_loader.cc.o
+
+# lodepng
+build $obj_dir/deps/lodepng/lodepng.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/lodepng/lodepng.cpp
+  dep_incs = -I$mujoco_dir/dependencies/lodepng
+  dep_cxxflags = -std=c++17
+build $lib_dir/liblodepng.a: archive $obj_dir/deps/lodepng/lodepng.cpp.o
+
+# qhullstatic_r
+build $obj_dir/deps/qhull/libqhull_r/global_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/global_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/stat_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/stat_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/geom2_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/geom2_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/poly2_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/poly2_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/merge_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/merge_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/libqhull_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/libqhull_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/geom_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/geom_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/poly_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/poly_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/qset_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/qset_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/mem_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/mem_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/random_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/random_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/usermem_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/usermem_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/userprintf_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/userprintf_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/io_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/io_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/user_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/user_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/accessors_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/accessors_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/rboxlib_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/rboxlib_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $obj_dir/deps/qhull/libqhull_r/userprintf_rbox_r.c.o: dep_cc_compile $mujoco_dir/dependencies/qhull/src/libqhull_r/userprintf_rbox_r.c
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+build $lib_dir/libqhullstatic_r.a: archive $obj_dir/deps/qhull/libqhull_r/global_r.c.o $obj_dir/deps/qhull/libqhull_r/stat_r.c.o $obj_dir/deps/qhull/libqhull_r/geom2_r.c.o $obj_dir/deps/qhull/libqhull_r/poly2_r.c.o $obj_dir/deps/qhull/libqhull_r/merge_r.c.o $obj_dir/deps/qhull/libqhull_r/libqhull_r.c.o $obj_dir/deps/qhull/libqhull_r/geom_r.c.o $obj_dir/deps/qhull/libqhull_r/poly_r.c.o $obj_dir/deps/qhull/libqhull_r/qset_r.c.o $obj_dir/deps/qhull/libqhull_r/mem_r.c.o $obj_dir/deps/qhull/libqhull_r/random_r.c.o $obj_dir/deps/qhull/libqhull_r/usermem_r.c.o $obj_dir/deps/qhull/libqhull_r/userprintf_r.c.o $obj_dir/deps/qhull/libqhull_r/io_r.c.o $obj_dir/deps/qhull/libqhull_r/user_r.c.o $obj_dir/deps/qhull/libqhull_r/accessors_r.c.o $obj_dir/deps/qhull/libqhull_r/rboxlib_r.c.o $obj_dir/deps/qhull/libqhull_r/userprintf_rbox_r.c.o
+
+# qhullcpp
+build $obj_dir/deps/qhull/libqhullcpp/Coordinates.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/Coordinates.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/PointCoordinates.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/PointCoordinates.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/Qhull.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/Qhull.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullFacet.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullFacet.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullFacetList.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullFacetList.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullFacetSet.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullFacetSet.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullHyperplane.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullHyperplane.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullPoint.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullPoint.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullPointSet.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullPointSet.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullPoints.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullPoints.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullQh.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullQh.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullRidge.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullRidge.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullSet.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullSet.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullStat.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullStat.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullUser.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullUser.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullVertex.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullVertex.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/QhullVertexSet.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/QhullVertexSet.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/RboxPoints.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/RboxPoints.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/RoadError.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/RoadError.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $obj_dir/deps/qhull/libqhullcpp/RoadLogEvent.cpp.o: dep_cxx_compile $mujoco_dir/dependencies/qhull/src/libqhullcpp/RoadLogEvent.cpp
+  dep_incs = -I$mujoco_dir/dependencies/qhull/src
+  dep_cxxflags = -std=c++17
+build $lib_dir/libqhullcpp.a: archive $obj_dir/deps/qhull/libqhullcpp/Coordinates.cpp.o $obj_dir/deps/qhull/libqhullcpp/PointCoordinates.cpp.o $obj_dir/deps/qhull/libqhullcpp/Qhull.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullFacet.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullFacetList.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullFacetSet.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullHyperplane.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullPoint.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullPointSet.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullPoints.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullQh.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullRidge.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullSet.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullStat.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullUser.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullVertex.cpp.o $obj_dir/deps/qhull/libqhullcpp/QhullVertexSet.cpp.o $obj_dir/deps/qhull/libqhullcpp/RboxPoints.cpp.o $obj_dir/deps/qhull/libqhullcpp/RoadError.cpp.o $obj_dir/deps/qhull/libqhullcpp/RoadLogEvent.cpp.o
+
+build $out_dir/.stamp.core_deps: phony $gen_dir/ccd/config.h $lib_dir/libccd.a $lib_dir/libqhullstatic_r.a $lib_dir/libqhullcpp.a $lib_dir/libtinyxml2.a $lib_dir/libtinyobjloader.a $lib_dir/liblodepng.a
+
+build $obj_dir/engine_callback.c.o: core_cc_compile $mujoco_dir/src/engine/engine_callback.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_collision_box.c.o: core_cc_compile $mujoco_dir/src/engine/engine_collision_box.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_collision_convex.c.o: core_cc_compile $mujoco_dir/src/engine/engine_collision_convex.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_collision_driver.c.o: core_cc_compile $mujoco_dir/src/engine/engine_collision_driver.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_collision_primitive.c.o: core_cc_compile $mujoco_dir/src/engine/engine_collision_primitive.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_core_constraint.c.o: core_cc_compile $mujoco_dir/src/engine/engine_core_constraint.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_core_smooth.c.o: core_cc_compile $mujoco_dir/src/engine/engine_core_smooth.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_crossplatform.c.o: core_cc_compile $mujoco_dir/src/engine/engine_crossplatform.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_derivative.c.o: core_cc_compile $mujoco_dir/src/engine/engine_derivative.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_derivative_fd.c.o: core_cc_compile $mujoco_dir/src/engine/engine_derivative_fd.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_forward.c.o: core_cc_compile $mujoco_dir/src/engine/engine_forward.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_inverse.c.o: core_cc_compile $mujoco_dir/src/engine/engine_inverse.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_io.c.o: core_cc_compile $mujoco_dir/src/engine/engine_io.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_passive.c.o: core_cc_compile $mujoco_dir/src/engine/engine_passive.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_plugin.cc.o: core_cxx_compile $mujoco_dir/src/engine/engine_plugin.cc | $out_dir/.stamp.core_deps
+build $obj_dir/engine_print.c.o: core_cc_compile $mujoco_dir/src/engine/engine_print.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_ray.c.o: core_cc_compile $mujoco_dir/src/engine/engine_ray.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_resource.c.o: core_cc_compile $mujoco_dir/src/engine/engine_resource.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_sensor.c.o: core_cc_compile $mujoco_dir/src/engine/engine_sensor.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_setconst.c.o: core_cc_compile $mujoco_dir/src/engine/engine_setconst.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_solver.c.o: core_cc_compile $mujoco_dir/src/engine/engine_solver.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_support.c.o: core_cc_compile $mujoco_dir/src/engine/engine_support.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_util_blas.c.o: core_cc_compile $mujoco_dir/src/engine/engine_util_blas.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_util_errmem.c.o: core_cc_compile $mujoco_dir/src/engine/engine_util_errmem.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_util_misc.c.o: core_cc_compile $mujoco_dir/src/engine/engine_util_misc.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_util_solve.c.o: core_cc_compile $mujoco_dir/src/engine/engine_util_solve.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_util_sparse.c.o: core_cc_compile $mujoco_dir/src/engine/engine_util_sparse.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_util_spatial.c.o: core_cc_compile $mujoco_dir/src/engine/engine_util_spatial.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_vfs.c.o: core_cc_compile $mujoco_dir/src/engine/engine_vfs.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_vis_init.c.o: core_cc_compile $mujoco_dir/src/engine/engine_vis_init.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_vis_interact.c.o: core_cc_compile $mujoco_dir/src/engine/engine_vis_interact.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_vis_state.c.o: core_cc_compile $mujoco_dir/src/engine/engine_vis_state.c | $out_dir/.stamp.core_deps
+build $obj_dir/engine_vis_visualize.c.o: core_cc_compile $mujoco_dir/src/engine/engine_vis_visualize.c | $out_dir/.stamp.core_deps
+
+build $obj_dir/user_composite.cc.o: core_cxx_compile $mujoco_dir/src/user/user_composite.cc | $out_dir/.stamp.core_deps
+build $obj_dir/user_mesh.cc.o: core_cxx_compile $mujoco_dir/src/user/user_mesh.cc | $out_dir/.stamp.core_deps
+build $obj_dir/user_model.cc.o: core_cxx_compile $mujoco_dir/src/user/user_model.cc | $out_dir/.stamp.core_deps
+build $obj_dir/user_objects.cc.o: core_cxx_compile $mujoco_dir/src/user/user_objects.cc | $out_dir/.stamp.core_deps
+build $obj_dir/user_util.cc.o: core_cxx_compile $mujoco_dir/src/user/user_util.cc | $out_dir/.stamp.core_deps
+
+build $obj_dir/xml_api.cc.o: core_cxx_compile $mujoco_dir/src/xml/xml_api.cc | $out_dir/.stamp.core_deps
+build $obj_dir/xml_base.cc.o: core_cxx_compile $mujoco_dir/src/xml/xml_base.cc | $out_dir/.stamp.core_deps
+build $obj_dir/xml.cc.o: core_cxx_compile $mujoco_dir/src/xml/xml.cc | $out_dir/.stamp.core_deps
+build $obj_dir/xml_native_reader.cc.o: core_cxx_compile $mujoco_dir/src/xml/xml_native_reader.cc | $out_dir/.stamp.core_deps
+build $obj_dir/xml_numeric_format.cc.o: core_cxx_compile $mujoco_dir/src/xml/xml_numeric_format.cc | $out_dir/.stamp.core_deps
+build $obj_dir/xml_native_writer.cc.o: core_cxx_compile $mujoco_dir/src/xml/xml_native_writer.cc | $out_dir/.stamp.core_deps
+build $obj_dir/xml_urdf.cc.o: core_cxx_compile $mujoco_dir/src/xml/xml_urdf.cc | $out_dir/.stamp.core_deps
+build $obj_dir/xml_util.cc.o: core_cxx_compile $mujoco_dir/src/xml/xml_util.cc | $out_dir/.stamp.core_deps
+
+build $lib_dir/libmujoco.a: archive $
+    $obj_dir/engine_callback.c.o $
+    $obj_dir/engine_collision_box.c.o $
+    $obj_dir/engine_collision_convex.c.o $
+    $obj_dir/engine_collision_driver.c.o $
+    $obj_dir/engine_collision_primitive.c.o $
+    $obj_dir/engine_core_constraint.c.o $
+    $obj_dir/engine_core_smooth.c.o $
+    $obj_dir/engine_crossplatform.c.o $
+    $obj_dir/engine_derivative.c.o $
+    $obj_dir/engine_derivative_fd.c.o $
+    $obj_dir/engine_forward.c.o $
+    $obj_dir/engine_inverse.c.o $
+    $obj_dir/engine_io.c.o $
+    $obj_dir/engine_passive.c.o $
+    $obj_dir/engine_plugin.cc.o $
+    $obj_dir/engine_print.c.o $
+    $obj_dir/engine_ray.c.o $
+    $obj_dir/engine_resource.c.o $
+    $obj_dir/engine_sensor.c.o $
+    $obj_dir/engine_setconst.c.o $
+    $obj_dir/engine_solver.c.o $
+    $obj_dir/engine_support.c.o $
+    $obj_dir/engine_util_blas.c.o $
+    $obj_dir/engine_util_errmem.c.o $
+    $obj_dir/engine_util_misc.c.o $
+    $obj_dir/engine_util_solve.c.o $
+    $obj_dir/engine_util_sparse.c.o $
+    $obj_dir/engine_util_spatial.c.o $
+    $obj_dir/engine_vfs.c.o $
+    $obj_dir/engine_vis_init.c.o $
+    $obj_dir/engine_vis_interact.c.o $
+    $obj_dir/engine_vis_state.c.o $
+    $obj_dir/engine_vis_visualize.c.o $
+    $obj_dir/user_composite.cc.o $
+    $obj_dir/user_mesh.cc.o $
+    $obj_dir/user_model.cc.o $
+    $obj_dir/user_objects.cc.o $
+    $obj_dir/user_util.cc.o $
+    $obj_dir/xml_api.cc.o $
+    $obj_dir/xml_base.cc.o $
+    $obj_dir/xml.cc.o $
+    $obj_dir/xml_native_reader.cc.o $
+    $obj_dir/xml_numeric_format.cc.o $
+    $obj_dir/xml_native_writer.cc.o $
+    $obj_dir/xml_urdf.cc.o $
+    $obj_dir/xml_util.cc.o
+
+build mujoco_deps: phony $gen_dir/ccd/config.h $lib_dir/libccd.a $lib_dir/libqhullstatic_r.a $lib_dir/libqhullcpp.a $lib_dir/libtinyxml2.a $lib_dir/libtinyobjloader.a $lib_dir/liblodepng.a
+build mujoco: phony $lib_dir/libmujoco.a $lib_dir/libtinyxml2.a $lib_dir/liblodepng.a $lib_dir/libqhullstatic_r.a $lib_dir/libqhullcpp.a $lib_dir/libccd.a $lib_dir/libtinyobjloader.a
+
+default mujoco

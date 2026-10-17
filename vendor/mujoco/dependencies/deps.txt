@@ -1,0 +1,10 @@
+lodepng https://github.com/lvandeve/lodepng.git b4ed2cd7ecf61d29076169b49199371456d4f90b 
+tinyxml2 https://github.com/leethomason/tinyxml2.git 9a89766acc42ddfa9e7133c7d81a5bda108a0ade
+tinyobjloader https://github.com/tinyobjloader/tinyobjloader.git 1421a10d6ed9742f5b2c1766d22faa6cfbc56248
+ccd https://github.com/danfis/libccd.git 7931e764a19ef6b21b443376c699bbc9c6d4fba8
+qhull https://github.com/qhull/qhull.git 0c8fc90d2037588024d9964515c1e684f6007ecc
+eigen3 https://gitlab.com/libeigen/eigen.git b378014fef017a829fb42c7fad15f3764bfb8ef9
+abseil https://github.com/abseil/abseil-cpp.git b971ac5250ea8de900eae9f95e06548d14cd95fe
+gtest https://github.com/google/googletest.git b796f7d44681514f58a683a3a71ff17c94edb0c1
+benchmark https://github.com/google/benchmark.git d572f4777349d43653b21d6c2fc63020ab326db2
+glfw3 https://github.com/glfw/glfw.git 7482de6071d21db77a7236155da44c172a7f6c9e

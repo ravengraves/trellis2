@@ -1,0 +1,73 @@
+<mujoco model="double_leg">
+    <option gravity="0 0 -9.81" timestep="0.002"/>
+    <asset>
+        <texture name="texplane" type="2d" builtin="checker" rgb1="0 0 0.8" rgb2="0 0 0.8" width="100" height="100"/>
+        <material name="MatPlane" reflectance="0.5" texture="texplane"/>
+    </asset>
+
+    <worldbody>
+        <geom name="floor" type="plane" size="1 1 0.1" material="MatPlane"/>
+        <light name="spotlight" pos="0 0 1" dir="0 0 -1"/>
+
+        <body name="torso" pos="0 0 0.762">
+            <joint type="free"/>
+            <inertial pos="0 0 0" mass="5" diaginertia="0.1 0.1 0.1"/>
+
+            <body name="thigh_right" pos="0 -0.1 -0.1">
+                <joint name="hip_y_right" type="hinge" pos="0 0 0" axis="0 1 0" damping="1.084" armature="0.045" limited="true" range="-150 0" stiffness="1" ref="0"/>
+                <joint name="hip_x_right" type="hinge" pos="0 0 0" axis="1 0 0" damping="1.084" armature="0.045" limited="true" range="-30 10" stiffness="1" ref="0"/>
+                <joint name="hip_z_right" type="hinge" pos="0 0 0" axis="0 0 1" damping="1.084" armature="0.045" limited="true" range="-60 35" stiffness="1" ref="0"/>
+                <geom type="capsule" fromto="0 0 0 0 0 -0.25" size="0.05"/>
+                <inertial pos="0 0 -0.125" mass="1" diaginertia="0.1 0.1 0.1"/>
+
+                <body name="shin_right" pos="0 0 -0.25">
+                    <joint name="knee_right" type="hinge" pos="0 0 0" axis="0 1 0" damping="1" armature="0.01" limited="true" range="-150 0" stiffness="1" ref="0"/>
+                    <geom type="capsule" fromto="0 0 0 0 0 -0.2" size="0.05"/>
+                    <inertial pos="0 0 -0.1" mass="1" diaginertia="0.1 0.1 0.1"/>
+
+                    <body name="foot_right" pos="0 0 -0.3">
+                        <joint name="ankle_right" type="hinge" pos="0 0 0" axis="0 1 0" damping="1" armature="0.01" limited="true" range="-45 45" stiffness="1" ref="0"/>
+                        <geom type="box" size="0.05 0.05 0.025"/>
+                        <inertial pos="0 0 0" mass="0.5" diaginertia="0.1 0.1 0.1"/>
+                    </body>
+                </body>
+            </body>
+
+           
+	  <body name="thigh_left" pos="0 0.1 -0.1">
+	      <joint name="hip_y_left" type="hinge" pos="0 0 0" axis="0 1 0" damping="1.084" armature="0.045" limited="true" range="-150 0" stiffness="1" ref="0"/>
+	      <joint name="hip_x_left" type="hinge" pos="0 0 0" axis="1 0 0" damping="1.084" armature="0.045" limited="true" range="-30 10" stiffness="1" ref="0"/>
+	      <joint name="hip_z_left" type="hinge" pos="0 0 0" axis="0 0 1" damping="1.084" armature="0.045" limited="true" range="-60 35" stiffness="1" ref="0"/>
+	      <geom type="capsule" fromto="0 0 0 0 0 -0.25" size="0.05"/>
+	      <inertial pos="0 0 -0.125" mass="1" diaginertia="0.1 0.1 0.1"/>
+
+
+                <body name="shin_left" pos="0 0 -0.25">
+                    <joint name="knee_left" type="hinge" pos="0 0 0" axis="0 1 0" damping="1" armature="0.01" limited="true" range="-150 0" stiffness="1" ref="0"/>
+                    <geom type="capsule" fromto="0 0 0 0 0 -0.2" size="0.05"/>
+                    <inertial pos="0 0 -0.1" mass="1" diaginertia="0.1 0.1 0.1"/>
+
+                    <body name="foot_left" pos="0 0 -0.3">
+                        <joint name="ankle_left" type="hinge" pos="0 0 0" axis="0 1 0" damping="1" armature="0.01" limited="true" range="-45 45" stiffness="1" ref="0"/>
+                        <geom type="box" size="0.05 0.05 0.025"/>
+                        <inertial pos="0 0 0" mass="0.5" diaginertia="0.1 0.1 0.1"/>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+
+
+      <actuator>
+        <position name="hip_y_motor_right" joint="hip_y_right" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+        <position name="hip_x_motor_right" joint="hip_x_right" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+        <position name="hip_z_motor_right" joint="hip_z_right" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+        <position name="knee_motor_right" joint="knee_right" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+        <position name="ankle_motor_right" joint="ankle_right" forcelimited="true" forcerange="-10.0 10.0"  kp="0.5"/>
+        <position name="hip_y_motor_left" joint="hip_y_left" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+        <position name="hip_x_motor_left" joint="hip_x_left" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+        <position name="hip_z_motor_left" joint="hip_z_left" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+        <position name="knee_motor_left" joint="knee_left" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+        <position name="ankle_motor_left" joint="ankle_left" forcelimited="true" forcerange="-10.0 10.0"  kp="0.5"/>
+    </actuator>
+</mujoco>

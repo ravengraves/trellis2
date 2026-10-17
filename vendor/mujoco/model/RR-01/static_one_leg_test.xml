@@ -1,0 +1,36 @@
+<mujoco model="humanoid">
+    <worldbody>
+        <!-- Ground -->
+        <geom name="ground" type="plane" pos="0 0 -0.5" size="1 1 0.1" />
+
+        <!-- Torso -->
+        <body name="torso" pos="0 0 0.5">
+            <joint name="torso_joint" type="slide" pos="0 0 0" axis="0 0 1" />
+            <geom name="torso_geom" type="sphere" size="0.1" mass="4" />
+
+            <!-- Thigh -->
+            <body name="thigh" pos="0 0 -0.1">
+                <joint name="thigh_joint" type="hinge" pos="0 0 0" axis="1 0 0" />
+                <geom name="thigh_geom" type="capsule" fromto="0 0 0 0 0 -0.25" size="0.05" mass="0.1"/>
+
+                <!-- Calf -->
+                <body name="calf" pos="0 0 -0.25">
+                    <joint name="knee" type="hinge" pos="0 0 0" axis="1 0 0" />
+                    <geom name="calf_geom" type="capsule" fromto="0 0 0 0 0 -0.2" size="0.05" mass="0.1"/>
+
+                    <!-- Foot -->
+                    <body name="foot" pos="0 0 -0.3">
+                        <joint name="foot_joint" type="hinge" pos="0 0 0" axis="1 0 0" />
+                        <geom name="foot_geom" type="box" size="0.05 0.05 0.025" friction="0.9 0.5 0.5" mass="0.05"/>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+
+    <actuator>
+	    <position name="thigh_motor" joint="thigh_joint" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+	    <position name="calf_motor" joint="knee" forcelimited="true" forcerange="-10.0 10.0" kp="4"/>
+	    <position name="foot_motor" joint="foot_joint" forcelimited="true" forcerange="-10.0 10.0"  kp="0.5"/>
+	</actuator>
+</mujoco>

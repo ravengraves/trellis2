@@ -1,0 +1,11 @@
+# Build artifacts (will be generated on first build)
+build/
+build_*/
+**/build/
+**/build_*/
+compile_commands.json
+.ninja_*
+
+# Qhull ships source-controlled project files in a directory named build.
+!dependencies/qhull/build/
+!dependencies/qhull/build/**

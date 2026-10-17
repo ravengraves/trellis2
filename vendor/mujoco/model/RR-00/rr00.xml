@@ -1,0 +1,184 @@
+<mujoco model="rr00">
+	<option timestep="0.0005"/>
+
+	<visual>
+		<map force="0.1" zfar="30"/>
+		<rgba haze="0.15 0.25 0.35 1"/>
+		<global offwidth="2560" offheight="1440" elevation="-20" azimuth="120"/>
+	</visual>
+
+	<statistic center="0 0 0.295"/>
+
+	<asset>
+		<texture type="skybox" builtin="gradient" rgb1=".3 .5 .7" rgb2="0 0 0" width="32" height="512"/>
+		<texture name="body" type="cube" builtin="flat" mark="cross" width="128" height="128" rgb1="0.8 0.6 0.4" rgb2="0.8 0.6 0.4" markrgb="1 1 1" random="0.01"/>
+		<material name="body" texture="body" texuniform="true" rgba="0.8 0.6 .4 1"/>
+		<texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+		<material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance=".2"/>
+	</asset>
+
+	<default>
+    <motor ctrlrange="-.1 .1" ctrllimited="true"/>
+    <joint type="hinge" damping=".2" stiffness="1" armature=".01" limited="true" solimplimit="0 .99 .01" range="-135 135"/>
+    <default class="body">
+      <!-- geoms -->
+      <geom type="capsule" condim="1" friction=".7" solimp=".9 .99 .003" solref=".015 1" material="body" density="7"/>
+  	</default>
+ 	</default>
+
+	<worldbody>
+		<geom name="floor" size="0 0 .05" type="plane" material="grid" condim="3"/>
+		<light name="spotlight" mode="targetbodycom" target="torso" diffuse=".8 .8 .8" specular="0.3 0.3 0.3" pos="0 -6 4" cutoff="30"/>
+
+		<!-- robot goes here -->
+		<body name="torso" pos="0 0 .295" childclass="body">
+		<freejoint name="root"/>
+		<geom name="torso_upper" fromto="0 -.0385 -.0115 0 .0385 -.0115" size=".015"/>
+		<geom name="torso_lower" fromto="0 -.0385 -.0345 0 .0385 -.0345" size=".015"/>
+		<geom name="abdomin_upper" fromto="0 -.030 -.073 0 .030 -.073" size=".015"/>
+		<geom name="abdomin_lower" fromto="0 -.030 -.093 0 .030 -.093" size=".015"/>
+
+			<!-- Head -->
+			<body name="head" pos="0 0 .0435" childclass="body">
+			<joint name="head_z" axis="0 0 1"/>
+			<geom name="head_upper" fromto="0 0 -.0095 .021 0 -.0095" size=".0095"/>
+			<geom name="head_lower" fromto="0 0 -.0285 .021 0 -.0285" size=".0095"/>
+			</body>
+
+			<!-- Right Leg -->
+			<body name="r_hip" pos="0 -0.030 -.095" childclass="body">
+			<joint name="r_hip_x" axis="1 0 0"/>
+			<geom name="r_hip_upper" fromto="0 -0.017 -.030 0 0.017 -.030" size=".01"/>
+
+				<body name="r_thigh" pos="0 0 -.045" childclass="body">
+				<joint name="r_hip_y" axis="0 1 0"/>
+				<geom name="r_thigh_upper1" fromto="0 -0.017 0 0 0.017 0" size=".01"/>
+				<geom name="r_thigh_upper2" fromto="0 -0.017 -.020 0 0.017 -.020" size=".01"/>
+				<geom name="r_thigh_lower1" fromto="-.020 -0.017 -.030 -.020 0.017 -.030" size=".01"/>
+				<geom name="r_thigh_lower2" fromto="-.020 -0.017 -.045 -.020 0.017 -.045" size=".01"/>
+
+				<body name="r_shin" pos="-.020 0 -.045" childclass="body">
+				<joint name="r_knee_y" axis="0 1 0"/>
+				<geom name="r_shin_upper" fromto="0 -0.017 -.030 0 0.017 -.030" size=".01"/>
+				<geom name="r_shin_lower" fromto="0 -0.017 -.050 0 0.017 -.050" size=".01"/>
+
+				<body name="r_ankle" pos="0 0 -.045" childclass="body">
+				<joint name="r_ankle_y" axis="0 1 0"/>
+				<geom name="r_ankle_y" fromto="0 -0.017 -.030 0 0.017 -.030" size=".008" mass="0.01"/>
+				<geom name="r_ankle_x" fromto="-0.017 0 -.030 0.017 0 -.030" size=".008" mass="0.01"/>
+
+				<body name="r_foot" pos="0 0 -.040" childclass="body">
+				<joint name="r_ankle_x" axis="1 0 0"/>
+				<geom name="r_foot_upper" fromto="-0.017 0 0 0.017 0 0" size=".01"/>
+				<geom name="r_foot_lower" fromto="-0.017 -.010 -0.005 0.017 -.010 -0.005" size=".01"/>
+				<geom name="r_foot_left" fromto="-0.017 -.027 -0.016 0.017 -.027 -0.016" size=".01" mass="0.01"/>
+				<geom name="r_foot_right" fromto="-0.017 -.000 -0.016 0.017 -.000 -0.016" size=".01" mass="0.01"/>
+
+				</body>
+				</body>
+				</body>
+				</body>
+			</body>
+
+			<!-- Left Leg -->
+			<body name="l_hip" pos="0 0.030 -.095" childclass="body">
+			<joint name="l_hip_x" axis="1 0 0"/>
+			<geom name="l_hip_upper" fromto="0 -0.017 -.030 0 0.017 -.030" size=".01"/>
+
+				<body name="l_thigh" pos="0 0 -.045" childclass="body">
+				<joint name="l_hip_y" axis="0 1 0"/>
+				<geom name="l_thigh_upper1" fromto="0 -0.017 0 0 0.017 0" size=".01"/>
+				<geom name="l_thigh_upper2" fromto="0 -0.017 -.020 0 0.017 -.020" size=".01"/>
+				<geom name="l_thigh_lower1" fromto="-.020 -0.017 -.030 -.020 0.017 -.030" size=".01"/>
+				<geom name="l_thigh_lower2" fromto="-.020 -0.017 -.045 -.020 0.017 -.045" size=".01"/>
+
+				<body name="l_shin" pos="-.020 0 -.045" childclass="body">
+				<joint name="l_knee_y" axis="0 1 0"/>
+				<geom name="l_shin_upper" fromto="0 -0.017 -.030 0 0.017 -.030" size=".01"/>
+				<geom name="l_shin_lower" fromto="0 -0.017 -.050 0 0.017 -.050" size=".01"/>
+
+				<body name="l_ankle" pos="0 0 -.045" childclass="body">
+				<joint name="l_ankle_y" axis="0 1 0"/>
+				<geom name="l_ankle_y" fromto="0 -0.017 -.030 0 0.017 -.030" size=".008" mass="0.01"/>
+				<geom name="l_ankle_x" fromto="-0.017 0 -.030 0.017 0 -.030" size=".008" mass="0.01"/>
+
+				<body name="l_foot" pos="0 0 -.040" childclass="body">
+				<joint name="l_ankle_x" axis="1 0 0"/>
+				<geom name="l_foot_upper" fromto="-0.017 0 0 0.017 0 0" size=".01"/>
+				<geom name="l_foot_lower" fromto="-0.017 .010 -0.005 0.017 .010 -0.005" size=".01"/>
+				<geom name="l_foot_left" fromto="-0.017 .027 -0.016 0.017 .027 -0.016" size=".01" mass="0.01"/>
+				<geom name="l_foot_right" fromto="-0.017 .000 -0.016 0.017 .000 -0.016" size=".01" mass="0.01"/>
+
+				</body>
+				</body>
+				</body>
+				</body>
+			</body>
+
+			<!-- Right Arm -->
+			<body name="r_bicep" pos="0 -0.075 -0.014" childclass="body">
+			<joint name="r_shoulder_y" axis="0 1 0" pos="0 .025 0"/>
+			<joint name="r_shoulder_x" axis="1 0 0"/>
+			<geom name="r_shoulder_1" fromto="0.017 0 0 -0.017 0 0" size=".01"/>
+			<geom name="r_shoulder_2" fromto="0.017 -0.020 0 -0.017 -0.020 0" size=".01"/>
+
+				<body name="r_forearm" pos="0 -0.050 0" childclass="body">
+				<joint name="r_elbow_x" axis="1 0 0"/>
+				<geom name="r_forearm_1" fromto="0.017 0 0 -0.017 0 0" size=".01"/>
+				<geom name="r_forearm_2" fromto="0.017 -0.020 0 -0.017 -0.020 0" size=".01"/>
+				<geom name="r_hand_1" fromto="-0.005 -0.050 0 -0.005 -0.080 0" size=".01" mass="0.01"/>
+				<geom name="r_hand_2" fromto="0.005 -0.050 0 0.005 -0.080 0" size=".01" mass="0.01"/>
+				</body>
+
+			</body>
+
+			<!-- Left Arm -->
+			<body name="l_bicep" pos="0 0.075 -0.014" childclass="body">
+			<joint name="l_shoulder_y" axis="0 1 0" pos="0 -.025 0"/>
+			<joint name="l_shoulder_x" axis="1 0 0"/>
+			<geom name="l_shoulder_1" fromto="0.017 0 0 -0.017 0 0" size=".01"/>
+			<geom name="l_shoulder_2" fromto="0.017 0.020 0 -0.017 0.020 0" size=".01"/>
+
+				<body name="l_forearm" pos="0 0.050 0" childclass="body">
+				<joint name="l_elbow_x" axis="1 0 0"/>
+				<geom name="l_forearm_1" fromto="0.017 0 0 -0.017 0 0" size=".01"/>
+				<geom name="l_forearm_2" fromto="0.017 0.020 0 -0.017 0.020 0" size=".01"/>
+				<geom name="l_hand_1" fromto="-0.005 0.050 0 -0.005 0.080 0" size=".01" mass="0.01"/>
+				<geom name="l_hand_2" fromto="0.005 0.050 0 0.005 0.080 0" size=".01" mass="0.01"/>
+				</body>
+
+			</body>
+
+		</body>
+
+
+
+	</worldbody>
+
+	<actuator>
+		<!-- motors go here -->
+		<motor name="head_z" gear="32" joint="head_z"/>
+
+		<motor name="r_hip_x" gear="32" joint="r_hip_x"/>
+		<motor name="r_hip_y" gear="32" joint="r_hip_y"/>
+		<motor name="r_knee_y" gear="32" joint="r_knee_y"/>
+		<motor name="r_ankle_y" gear="32" joint="r_ankle_y"/>
+		<motor name="r_ankle_x" gear="32" joint="r_ankle_x"/>
+
+		<motor name="l_hip_x" gear="32" joint="l_hip_x"/>
+		<motor name="l_hip_y" gear="32" joint="l_hip_y"/>
+		<motor name="l_knee_y" gear="32" joint="l_knee_y"/>
+		<motor name="l_ankle_y" gear="32" joint="l_ankle_y"/>
+		<motor name="l_ankle_x" gear="32" joint="l_ankle_x"/>
+
+
+		<motor name="l_shoulder_y" gear="32" joint="l_shoulder_y"/>
+		<motor name="l_shoulder_x" gear="32" joint="l_shoulder_x"/>
+		<motor name="l_elbow_x" gear="32" joint="l_elbow_x"/>
+
+		<motor name="r_shoulder_y" gear="32" joint="r_shoulder_y"/>
+		<motor name="r_shoulder_x" gear="32" joint="r_shoulder_x"/>
+		<motor name="r_elbow_x" gear="32" joint="r_elbow_x"/>
+
+	</actuator>
+</mujoco>

@@ -1,0 +1,29 @@
+<mujoco>
+  <worldbody>
+    <body name="torso" pos="0 0 1">
+      <joint type="free"/>
+      <geom type="capsule" fromto="0 0 0 0 0 1" size="0.1"/>
+      <body name="head" pos="0 0 1">
+        <joint type="hinge" axis="0 0 1"/>
+        <geom type="capsule" fromto="0 0 0 0 0 0.2" size="0.1"/>
+      </body>
+      <body name="upper_arm" pos="0.2 0 0.8">
+        <joint type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 0.4 0 0" size="0.05"/>
+        <body name="lower_arm" pos="0.4 0 0">
+          <joint type="hinge" axis="0 1 0"/>
+          <geom type="capsule" fromto="0 0 0 0.4 0 0" size="0.05"/>
+        </body>
+      </body>
+      <body name="upper_leg" pos="0 0 0.6">
+        <joint type="hinge" axis="1 0 0"/>
+        <geom type="capsule" fromto="0 0 0 0 0 -0.4" size="0.05"/>
+        <body name="lower_leg" pos="0 0 -0.4">
+          <joint type="hinge" axis="1 0 0"/>
+          <geom type="capsule" fromto="0 0 0 0 0 -0.4" size="0.05"/>
+        </body>
+      </body>
+    </body>
+    <geom type="plane" size="1000 1000 0.1" rgba="0.8 0.9 0.8 1"/>
+  </worldbody>
+</mujoco>
