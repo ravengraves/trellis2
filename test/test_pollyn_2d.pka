@@ -1,0 +1,112 @@
+use math;
+
+def TEST_W: i32 = 800;
+def TEST_H: i32 = 600;
+
+fn draw_filled_circle_gpu(cpu: *E2CpuColorVertexBuffer,
+	cx: f32, cy: f32, radius: f32, col: Color) void = {
+	let NS: i32 = 12;
+	let center = vec3_new(cx, cy, 0.0);
+	for (let i: i32 = 0; i < NS; i += 1) {
+		let j: i32 = (i + 1) % NS;
+		let sc0 = math::sincos((i: f32) * 2.0 * math::PI / (NS: f32));
+		let sc1 = math::sincos((j: f32) * 2.0 * math::PI / (NS: f32));
+		util_cpu_color_buffer_add_tri(cpu,
+			center,
+			vec3_new(cx + radius * sc0.c, cy + radius * sc0.s, 0.0),
+			vec3_new(cx + radius * sc1.c, cy + radius * sc1.s, 0.0),
+			col);
+	};
+};
+
+fn draw_thick_line_quad(cpu: *E2CpuColorVertexBuffer,
+	x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, col: Color) void = {
+	let dx = x1 - x0;
+	let dy = y1 - y0;
+	let length = math::sqrt(dx * dx + dy * dy);
+	if (length < 0.001) { return; };
+	let nx = -dy / length * thickness;
+	let ny = dx / length * thickness;
+	let p0 = vec3_new(x0 + nx, y0 + ny, 0.0);
+	let p1 = vec3_new(x0 - nx, y0 - ny, 0.0);
+	let p2 = vec3_new(x1 - nx, y1 - ny, 0.0);
+	let p3 = vec3_new(x1 + nx, y1 + ny, 0.0);
+	util_cpu_color_buffer_add_tri(cpu, p0, p1, p2, col);
+	util_cpu_color_buffer_add_tri(cpu, p0, p2, p3, col);
+};
+
+export fn main() void = {
+	let mode = E2_MODE_WINDOW;
+	let rt = e2_runtime_init(mode, TEST_W, TEST_H);
+	rt.target_fps = 60;
+	if (!e2_runtime_start(&rt)) {
+		fb::Printsln("test_pollyn_2d: engine start failed");
+		return;
+	};
+	if (!e2_init_blit_shader()) {
+		fb::Printsln("test_pollyn_2d: blit shader init failed");
+		e2_runtime_shutdown(&rt);
+		return;
+	};
+
+	let frame: i32 = 0;
+	for (e2_runtime_should_run(&rt)) {
+		e2_runtime_begin_frame(&rt);
+		frame = frame + 1;
+
+		e2_pass_begin(&rt, color_new(0.05, 0.05, 0.08, 1.0));
+
+		let cpu = util_cpu_color_buffer_init();
+
+		// Filled circles at various positions
+		draw_filled_circle_gpu(&cpu, 100.0, 100.0, 20.0, color_new(0.0, 1.0, 0.0, 0.9));
+		draw_filled_circle_gpu(&cpu, 200.0, 100.0, 15.0, color_new(1.0, 0.0, 0.0, 0.9));
+		draw_filled_circle_gpu(&cpu, 300.0, 100.0, 10.0, color_new(0.0, 0.0, 1.0, 0.9));
+		draw_filled_circle_gpu(&cpu, 400.0, 100.0, 6.0, color_new(1.0, 0.8, 0.0, 0.9));
+		draw_filled_circle_gpu(&cpu, 500.0, 100.0, 3.0, color_new(1.0, 0.0, 1.0, 0.9));
+
+		// Thick lines as polygon quads
+		draw_thick_line_quad(&cpu, 50.0, 200.0, 350.0, 200.0, 2.0,
+			color_new(1.0, 1.0, 1.0, 1.0));
+		draw_thick_line_quad(&cpu, 50.0, 220.0, 350.0, 250.0, 4.0,
+			color_new(1.0, 0.2, 0.2, 0.9));
+		draw_thick_line_quad(&cpu, 50.0, 280.0, 350.0, 330.0, 6.0,
+			color_new(0.2, 0.6, 1.0, 0.9));
+
+		// Diagonal thick lines
+		draw_thick_line_quad(&cpu, 420.0, 180.0, 600.0, 350.0, 3.0,
+			color_new(0.2, 1.0, 0.6, 0.9));
+		draw_thick_line_quad(&cpu, 600.0, 180.0, 420.0, 350.0, 5.0,
+			color_new(1.0, 0.6, 0.2, 0.9));
+
+		// Circling lines (like motion tracks)
+		let anim_angle = (frame: f32) * 0.05;
+		for (let a: i32 = 0; a < 8; a += 1) {
+			let a0 = anim_angle + (a: f32) * math::PI / 4.0;
+			let a1 = anim_angle + ((a + 1): f32) * math::PI / 4.0;
+			let r0: f32 = 60.0;
+			let r1: f32 = 80.0;
+			let x0: f32 = 650.0 + r0 * math::sincos(a0).c;
+			let y0: f32 = 450.0 + r0 * math::sincos(a0).s;
+			let x1: f32 = 650.0 + r1 * math::sincos(a1).c;
+			let y1: f32 = 450.0 + r1 * math::sincos(a1).s;
+			draw_thick_line_quad(&cpu, x0, y0, x1, y1, 2.0,
+				color_new(1.0, 0.5, 0.0, 0.8));
+		};
+
+		let gpu = util_color_upload(&cpu);
+		let pass = util_color_pass_init();
+		util_color_pass_add(&pass, &gpu, 1.0);
+		e2_pass_2d_geom(&rt, pass.draws[0z..(pass.count: size)]);
+		e2_gpu_color_destroy(&gpu);
+
+		e2_pass_end(&rt);
+
+		e2_text_add(&rt, 0.02, 0.02, "pollyn 2D test: circles (tris) + thick lines (quads)", 220u8, 220u8, 220u8);
+		e2_text_add(&rt, 0.02, 0.08, "green=20px red=15px blue=10px yellow=6px magenta=3px", 180u8, 180u8, 180u8);
+		e2_pass_text(&rt);
+		e2_runtime_present(&rt);
+	};
+
+	e2_runtime_shutdown(&rt);
+};

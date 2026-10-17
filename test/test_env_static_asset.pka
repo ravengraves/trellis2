@@ -1,0 +1,42 @@
+// test_env_static_asset.pka — Static render asset bound to invisible MuJoCo geom.
+
+use fb;
+use proc;
+use strings;
+
+export fn main() void = {
+	fb::Printsln("=== test_env_static_asset ===");
+
+	let path = strings::toutf8("models/static_env_asset.xml");
+	assert(mj_shim_load(path.data) == 0, "model load");
+
+	let rt = e2_runtime_init(E2_MODE_HEADLESS, 64, 64);
+	assert(e2_runtime_start(&rt), "engine start");
+
+	let sc = scene_new();
+	scene_init(&sc);
+	scene_update(&sc);
+
+	let geom_pass = util_geom_pass_init();
+	scene_geom_pass(&sc, &geom_pass);
+	assert(geom_pass.count == 0, "transparent collision geom skipped");
+
+	let asset = env_static_asset_load("test/assets/static_env", "static_collision");
+	assert(asset.valid, "static asset valid");
+	assert(asset.geom_id >= 0, "geom id resolved");
+	assert(asset.mesh.valid, "render mesh loaded");
+	assert(asset.albedo.valid, "required albedo loaded");
+	assert(asset.material.texture == asset.albedo.handle, "albedo bound");
+
+	env_static_asset_add_to_pass(&asset, &geom_pass);
+	assert(geom_pass.count == 1, "static asset draw added");
+	assert(geom_pass.draws[0z].material.texture == asset.albedo.handle,
+		"draw uses asset texture");
+
+	env_static_asset_destroy(&asset);
+	scene_destroy(&sc);
+	mj_shim_free();
+	e2_runtime_shutdown(&rt);
+	fb::Printsln("  test_env_static_asset: OK");
+	proc::Exit(0);
+};

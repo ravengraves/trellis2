@@ -2,7 +2,6 @@
 // Loads ball.xml, inits engine headless, renders one frame, checks pixels.
 
 use fb;
-use fb;
 
 fn count_nonblack_rgb(pixels: []u8) i32 = {
 	let n: i32 = 0;

@@ -6,12 +6,12 @@ format to include UV coordinates. Enable per-material texture binding.
 
 ## Implementation Steps
 
-- [x] **Step 1**: Extend vertex format in `pollyn_engine/src/mesh.pka`
+- [x] **Step 1**: Extend vertex format in `internal/pollyn_engine/src/mesh.pka`
   - VERT_STRIDE 6→8, MAX_FLOATS 24576→32768
   - mesh_add_vert gains (u, v) parameters
   - All mesh_create_* emit UVs (plane/box get proper UVs, sphere/cylinder get cylindrical UVs)
 
-- [x] **Step 2**: Update C shim vertex handling in `pollyn_engine/shim/pollyn_shim.c`
+- [x] **Step 2**: Update C shim vertex handling in `internal/pollyn_engine/shim/pollyn_shim.c`
   - All draw functions: stride 24→32, add a_uv attrib pointer at offset 24
   - STL loader: write 8 floats per vertex (u=0, v=0 appended)
   - Cache a_uv locations for pbr, flat, depth shaders
@@ -31,7 +31,7 @@ format to include UV coordinates. Enable per-material texture binding.
   - Fix hardcoded `* 6` offsets to use `* 8`
   - Update test_mesh_from_buffers data (24→32 floats)
 
-- [x] **Step 6**: Create `pollyn_engine/test/test_pbr_texture.pka`
+- [x] **Step 6**: Create `internal/pollyn_engine/test/test_pbr_texture.pka`
   - Generate procedural checkerboard texture (red/green 8x8)
   - Test 1: PBR without texture (solid red albedo)
   - Test 2: PBR with checkerboard texture (red+green visible)

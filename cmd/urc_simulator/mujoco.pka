@@ -1,0 +1,113 @@
+// mujoco.pka — @symbol declarations for mujoco_shim.c
+// Provides Pika bindings to the MuJoCo C shim.
+
+// MuJoCo geom type constants (from mjmodel.h)
+export def MJ_GEOM_PLANE:    i32 = 0;
+export def MJ_GEOM_HFIELD:   i32 = 1;
+export def MJ_GEOM_SPHERE:   i32 = 2;
+export def MJ_GEOM_CAPSULE:  i32 = 3;
+export def MJ_GEOM_ELLIPSOID: i32 = 4;
+export def MJ_GEOM_CYLINDER: i32 = 5;
+export def MJ_GEOM_BOX:      i32 = 6;
+export def MJ_GEOM_MESH:     i32 = 7;
+
+// Load a MuJoCo XML model. Returns 0 on success, -1 on failure.
+export @symbol("mj_shim_load")
+fn mj_shim_load(path: *u8) i32;
+
+// Freeze the currently visible snapshot for a render/read pass.
+// Nested begin/end pairs are allowed.
+export @symbol("mj_shim_snapshot_begin")
+fn mj_shim_snapshot_begin() void;
+
+export @symbol("mj_shim_snapshot_end")
+fn mj_shim_snapshot_end() void;
+
+// Step the simulation forward by one timestep.
+export @symbol("mj_shim_step")
+fn mj_shim_step() void;
+
+// Return the number of geoms in the model.
+export @symbol("mj_shim_ngeom")
+fn mj_shim_ngeom() i32;
+
+// Return the geom type for geom i.
+export @symbol("mj_shim_geom_type")
+fn mj_shim_geom_type(i: i32) i32;
+
+// Copy geom size into out (3 floats).
+export @symbol("mj_shim_geom_size")
+fn mj_shim_geom_size(i: i32, out: *f32) void;
+
+// Copy geom world position into out (3 floats).
+export @symbol("mj_shim_geom_pos")
+fn mj_shim_geom_pos(i: i32, out: *f32) void;
+
+// Copy geom world rotation matrix into out (9 floats, row-major 3x3).
+export @symbol("mj_shim_geom_mat")
+fn mj_shim_geom_mat(i: i32, out: *f32) void;
+
+// Resolve RGBA for geom (material or geom_rgba) into out (4 floats).
+export @symbol("mj_shim_geom_rgba")
+fn mj_shim_geom_rgba(i: i32, out: *f32) void;
+
+// Return model timestep as f64.
+export @symbol("mj_shim_timestep")
+fn mj_shim_timestep() f64;
+
+// Return model stat extent (for plane scale).
+export @symbol("mj_shim_stat_extent")
+fn mj_shim_stat_extent() f32;
+
+// Return the simulation time for the current snapshot.
+export @symbol("mj_shim_time")
+fn mj_shim_time() f64;
+
+// Resolve a body id from its MuJoCo name. Returns -1 if not found.
+export @symbol("mj_shim_body_id")
+fn mj_shim_body_id(name: *u8) i32;
+
+// Resolve a geom id from its MuJoCo name. Returns -1 if not found.
+export @symbol("mj_shim_geom_id")
+fn mj_shim_geom_id(name: *u8) i32;
+
+// Return the number of bodies in the model.
+export @symbol("mj_shim_nbody")
+fn mj_shim_nbody() i32;
+
+// Copy body world position into out (3 floats).
+export @symbol("mj_shim_body_pos")
+fn mj_shim_body_pos(i: i32, out: *f32) void;
+
+// Copy body world rotation matrix into out (9 floats, row-major 3x3).
+export @symbol("mj_shim_body_mat")
+fn mj_shim_body_mat(i: i32, out: *f32) void;
+
+// Return the number of sites in the model.
+export @symbol("mj_shim_nsite")
+fn mj_shim_nsite() i32;
+
+// Copy site world position into out (3 floats).
+export @symbol("mj_shim_site_pos")
+fn mj_shim_site_pos(i: i32, out: *f32) void;
+
+// Return the number of tendons in the model.
+export @symbol("mj_shim_ntendon")
+fn mj_shim_ntendon() i32;
+
+// For a two-site tendon, write the site ids to out[0..1] and return 1.
+// Returns 0 for non-site or multi-segment tendons.
+export @symbol("mj_shim_tendon_site_pair")
+fn mj_shim_tendon_site_pair(i: i32, out: *i32) i32;
+
+// Return tendon render width, or 0 if unavailable.
+export @symbol("mj_shim_tendon_width")
+fn mj_shim_tendon_width(i: i32) f32;
+
+// Resolve tendon RGBA into out (4 floats).
+export @symbol("mj_shim_tendon_rgba")
+fn mj_shim_tendon_rgba(i: i32, out: *f32) void;
+
+// Free model and data.
+export @symbol("mj_shim_free")
+fn mj_shim_free() void;

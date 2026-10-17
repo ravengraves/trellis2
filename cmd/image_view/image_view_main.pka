@@ -4,6 +4,7 @@ use strings;
 
 @symbol("image_view_bridge_init") fn image_view_bridge_init(
 	topic: *u8,
+	bbox_topic: *u8,
 	width: i32,
 	height: i32,
 	channels: i32,
@@ -16,12 +17,21 @@ use strings;
 @symbol("image_view_bridge_copy_rgb") fn image_view_bridge_copy_rgb(
 	out_rgb: *u8, max_bytes: i32,
 	out_w: *i32, out_h: *i32, out_channels: *i32) i32;
+@symbol("image_view_bridge_bbox_count") fn image_view_bridge_bbox_count() i32;
+@symbol("image_view_bridge_copy_bbox") fn image_view_bridge_copy_bbox(
+	index: i32,
+	out_xmin: *f64, out_ymin: *f64, out_xmax: *f64, out_ymax: *f64,
+	out_r: *i32, out_g: *i32, out_b: *i32,
+	out_name: *u8, out_name_size: i32) i32;
 
 def IMAGE_VIEW_MAX_W: i32 = 1920;
 def IMAGE_VIEW_MAX_H: i32 = 1080;
 def IMAGE_VIEW_MAX_RGB: size = 6220800z;
+def IMAGE_VIEW_BBOX_NAME_BYTES: i32 = 64;
+def IMAGE_VIEW_BBOX_NAME_BYTES_Z: size = 64z;
 
 let image_view_rgb_buf: [IMAGE_VIEW_MAX_RGB]u8 = [0...];
+let image_view_bbox_name_buf: [IMAGE_VIEW_BBOX_NAME_BYTES_Z]u8 = [0...];
 
 type ImageViewRect = struct {
 	x: i32,
@@ -30,8 +40,21 @@ type ImageViewRect = struct {
 	h: i32,
 };
 
+type ImageViewBBox = struct {
+	xmin: f64,
+	ymin: f64,
+	xmax: f64,
+	ymax: f64,
+	r: i32,
+	g: i32,
+	b: i32,
+	name_len: i32,
+	valid: bool,
+};
+
 type ImageViewCli = struct {
 	topic: str,
+	bbox_topic: str,
 	width: i32,
 	height: i32,
 	channels: i32,
@@ -45,8 +68,9 @@ fn image_view_print_usage() void = {
 	fb::Printsln("usage: image_view [--terminal] [--half-cell] [--term-lines] [--smoke]");
 	fb::Printsln("                  [--topic TOPIC] [--width PIXELS] [--height PIXELS]");
 	fb::Printsln("                  [--channels COUNT] [--input-buffer-size BYTES]");
-	fb::Printsln("                  [--latest-only 0|1] [TOPIC]");
+	fb::Printsln("                  [--latest-only 0|1] [--box-topic TOPIC] [TOPIC]");
 	fb::Printsln("defaults: width/height/channels are auto-inferred when possible");
+	fb::Printsln("boxes: publish List[List[xmin,ymin,xmax,ymax,r,g,b,name], ...] to --box-topic");
 };
 
 fn image_view_is_flag(arg: str) bool = {
@@ -79,6 +103,7 @@ fn image_view_parse_i32(arg: str) i32 = {
 fn image_view_parse_cli() ImageViewCli = {
 	let cfg = ImageViewCli {
 		topic = "/camera/rgb",
+		bbox_topic = "",
 		width = 0,
 		height = 0,
 		channels = 0,
@@ -102,7 +127,7 @@ fn image_view_parse_cli() ImageViewCli = {
 		};
 		if (arg == "--topic" || arg == "--width" || arg == "--height" ||
 			arg == "--channels" || arg == "--input-buffer-size" ||
-			arg == "--latest-only") {
+			arg == "--latest-only" || arg == "--bbox-topic" || arg == "--box-topic") {
 			if (i + 1 >= argc) {
 				cfg.valid = false;
 				return cfg;
@@ -112,6 +137,8 @@ fn image_view_parse_cli() ImageViewCli = {
 			if (arg == "--topic") {
 				cfg.topic = value;
 				topic_set = true;
+			} else if (arg == "--bbox-topic" || arg == "--box-topic") {
+				cfg.bbox_topic = value;
 			} else if (arg == "--width") {
 				cfg.width = image_view_parse_i32(value);
 			} else if (arg == "--height") {
@@ -180,6 +207,140 @@ fn image_view_fit_image(bounds: *ImageViewRect, img_w: i32, img_h: i32) ImageVie
 	return out;
 };
 
+fn image_view_empty_bbox() ImageViewBBox = {
+	return ImageViewBBox {
+		xmin = 0.0f64,
+		ymin = 0.0f64,
+		xmax = 0.0f64,
+		ymax = 0.0f64,
+		r = 255,
+		g = 224,
+		b = 64,
+		name_len = 0,
+		valid = false,
+	};
+};
+
+fn image_view_read_bbox(index: i32) ImageViewBBox = {
+	let box = image_view_empty_bbox();
+	let copy_rc = image_view_bridge_copy_bbox(
+		index,
+		&box.xmin, &box.ymin, &box.xmax, &box.ymax,
+		&box.r, &box.g, &box.b,
+		&image_view_bbox_name_buf[0z], IMAGE_VIEW_BBOX_NAME_BYTES);
+	if (copy_rc <= 0) {
+		return box;
+	};
+	box.name_len = copy_rc - 1;
+	box.valid = true;
+	return box;
+};
+
+fn image_view_clamp_f64(v: f64, lo: f64, hi: f64) f64 = {
+	if (v < lo) { return lo; };
+	if (v > hi) { return hi; };
+	return v;
+};
+
+fn image_view_color_component(c: i32) f32 = {
+	let v = c;
+	if (v < 0) { v = 0; };
+	if (v > 255) { v = 255; };
+	return (v: f32) / 255.0;
+};
+
+fn image_view_add_outline(buf: *E2CpuColorVertexBuffer,
+	x: i32, y: i32, w: i32, h: i32, c: Color) void = {
+	if (w <= 1 || h <= 1) { return; };
+	let p0 = vec3_new(x: f32, y: f32, 0.0);
+	let p1 = vec3_new((x + w): f32, y: f32, 0.0);
+	let p2 = vec3_new((x + w): f32, (y + h): f32, 0.0);
+	let p3 = vec3_new(x: f32, (y + h): f32, 0.0);
+	util_cpu_color_buffer_add_line(buf, p0, p1, c);
+	util_cpu_color_buffer_add_line(buf, p1, p2, c);
+	util_cpu_color_buffer_add_line(buf, p2, p3, c);
+	util_cpu_color_buffer_add_line(buf, p3, p0, c);
+};
+
+fn image_view_bbox_screen_rect(fit: *ImageViewRect,
+	img_w: i32, img_h: i32, box: *ImageViewBBox) ImageViewRect = {
+	let x0 = box.xmin;
+	let y0 = box.ymin;
+	let x1 = box.xmax;
+	let y1 = box.ymax;
+
+	if (x0 >= 0.0f64 && y0 >= 0.0f64 && x1 >= 0.0f64 && y1 >= 0.0f64 &&
+		x0 <= 1.0f64 && y0 <= 1.0f64 && x1 <= 1.0f64 && y1 <= 1.0f64) {
+		x0 = x0 * (img_w: f64);
+		x1 = x1 * (img_w: f64);
+		y0 = y0 * (img_h: f64);
+		y1 = y1 * (img_h: f64);
+	};
+	if (x0 > x1) {
+		let tx = x0;
+		x0 = x1;
+		x1 = tx;
+	};
+	if (y0 > y1) {
+		let ty = y0;
+		y0 = y1;
+		y1 = ty;
+	};
+
+	x0 = image_view_clamp_f64(x0, 0.0f64, img_w: f64);
+	x1 = image_view_clamp_f64(x1, 0.0f64, img_w: f64);
+	y0 = image_view_clamp_f64(y0, 0.0f64, img_h: f64);
+	y1 = image_view_clamp_f64(y1, 0.0f64, img_h: f64);
+
+	let sx0 = (fit.x: f64) + (x0 / (img_w: f64)) * (fit.w: f64);
+	let sx1 = (fit.x: f64) + (x1 / (img_w: f64)) * (fit.w: f64);
+	let sy0 = (fit.y: f64) + (y0 / (img_h: f64)) * (fit.h: f64);
+	let sy1 = (fit.y: f64) + (y1 / (img_h: f64)) * (fit.h: f64);
+	let rx = sx0: i32;
+	let ry = sy0: i32;
+	let rw = (sx1 - sx0): i32;
+	let rh = (sy1 - sy0): i32;
+	return ImageViewRect { x = rx, y = ry, w = rw, h = rh };
+};
+
+fn image_view_draw_bbox(rt: *E2Runtime,
+	bounds: *ImageViewRect, fit: *ImageViewRect,
+	img_w: i32, img_h: i32, box: *ImageViewBBox) void = {
+	if (!box.valid || img_w <= 0 || img_h <= 0) { return; };
+	let rect = image_view_bbox_screen_rect(fit, img_w, img_h, box);
+	let col = color_new(
+		image_view_color_component(box.r),
+		image_view_color_component(box.g),
+		image_view_color_component(box.b),
+		1.0);
+
+	let line_cpu = util_cpu_color_buffer_init();
+	image_view_add_outline(&line_cpu, rect.x, rect.y, rect.w, rect.h, col);
+	let line_gpu = util_color_upload(&line_cpu);
+	let line_pass = util_color_pass_init();
+	util_color_pass_add(&line_pass, &line_gpu, 2.0);
+	e2_pass_2d_lines(rt, line_pass.draws[0z..(line_pass.count: size)]);
+	e2_gpu_color_destroy(&line_gpu);
+
+	if (box.name_len > 0) {
+		let label_x = rect.x;
+		let label_y = rect.y - 16;
+		if (label_y < 2) {
+			label_y = rect.y + 4;
+		};
+		let label_dx = label_x - bounds.x;
+		let label_dy = label_y - bounds.y;
+		let x_frac = (label_dx: f32) / (bounds.w: f32);
+		let y_frac = (label_dy: f32) / (bounds.h: f32);
+		let label_buf: [IMAGE_VIEW_BBOX_NAME_BYTES_Z]u8 = [0...];
+		for (let i: i32 = 0; i < box.name_len && i < IMAGE_VIEW_BBOX_NAME_BYTES - 1; i += 1) {
+			label_buf[i: size] = image_view_bbox_name_buf[i: size];
+		};
+		let label = strings::fromutf8_unsafe(label_buf[0z..(box.name_len: size)]);
+		e2_text_add(rt, x_frac, y_frac, label, box.r: u8, box.g: u8, box.b: u8);
+	};
+};
+
 export fn main() void = {
 	let cli = image_view_parse_cli();
 	if (cli.show_help) {
@@ -192,8 +353,10 @@ export fn main() void = {
 	};
 
 	let topic_u8 = strings::toutf8(cli.topic);
+	let bbox_topic_u8 = strings::toutf8(cli.bbox_topic);
 	let bridge_rc = image_view_bridge_init(
 		topic_u8.data,
+		bbox_topic_u8.data,
 		cli.width,
 		cli.height,
 		cli.channels,
@@ -276,6 +439,11 @@ export fn main() void = {
 			let bounds = image_view_target_rect(&rt);
 			let fit = image_view_fit_image(&bounds, tex.width, tex.height);
 			e2_pass_2d_texture(&rt, &tex, fit.x, fit.y, fit.w, fit.h);
+			let box_count = image_view_bridge_bbox_count();
+			for (let box_i: i32 = 0; box_i < box_count; box_i += 1) {
+				let bbox = image_view_read_bbox(box_i);
+				image_view_draw_bbox(&rt, &bounds, &fit, tex.width, tex.height, &bbox);
+			};
 		};
 		e2_pass_end(&rt);
 

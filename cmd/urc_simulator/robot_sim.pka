@@ -1,0 +1,82 @@
+// robot_sim.pka — Extra bindings for the robot simulator shim.
+
+export @symbol("mj_shim_start_threaded")
+fn mj_shim_start_threaded() i32;
+
+export @symbol("mj_shim_stop_threaded")
+fn mj_shim_stop_threaded() void;
+
+export @symbol("mj_shim_threaded_active")
+fn mj_shim_threaded_active() i32;
+
+export @symbol("mj_shim_reset_now")
+fn mj_shim_reset_now() i32;
+
+export @symbol("mj_shim_consume_reset_request")
+fn mj_shim_consume_reset_request() i32;
+
+export @symbol("mj_shim_reset_count")
+fn mj_shim_reset_count() u64;
+
+export @symbol("mj_shim_set_timestep")
+fn mj_shim_set_timestep(timestep: f64) i32;
+
+export @symbol("mj_shim_configure_tank_controls")
+fn mj_shim_configure_tank_controls(
+	topic: *u8,
+	left_actuator: *u8,
+	right_actuator: *u8,
+	max_cmd: f32) i32;
+
+export @symbol("mj_shim_ros_render_init")
+fn mj_shim_ros_render_init(
+	node_name: *u8,
+	rgb_topic: *u8,
+	depth_topic: *u8,
+	rgb_message_bytes: i32,
+	depth_message_bytes: i32,
+	hz: i32) i32;
+
+export @symbol("mj_shim_ros_motion_init")
+fn mj_shim_ros_motion_init(
+	node_name: *u8,
+	imu_topic: *u8,
+	vio_topic: *u8,
+	imu_message_bytes: i32,
+	vio_message_bytes: i32,
+	imu_hz: i32,
+	vio_hz: i32) i32;
+
+export @symbol("mj_shim_motion_source_status")
+fn mj_shim_motion_source_status() i32;
+
+export @symbol("mj_shim_motion_sample")
+fn mj_shim_motion_sample(imu_out: *f64, vio_out: *f64) i32;
+
+export @symbol("mj_shim_ros_spin_once")
+fn mj_shim_ros_spin_once() void;
+
+export @symbol("mj_shim_ros_ok")
+fn mj_shim_ros_ok() i32;
+
+export @symbol("mj_shim_ros_rgb_index")
+fn mj_shim_ros_rgb_index() u64;
+
+export @symbol("mj_shim_ros_imu_index")
+fn mj_shim_ros_imu_index() u64;
+
+export @symbol("mj_shim_ros_vio_index")
+fn mj_shim_ros_vio_index() u64;
+
+export @symbol("mj_shim_ros_render_publish_rgb")
+fn mj_shim_ros_render_publish_rgb(
+	rgb: *u8,
+	width: i32,
+	height: i32,
+	channels: i32) i32;
+
+export @symbol("mj_shim_ros_render_publish_depth")
+fn mj_shim_ros_render_publish_depth(
+	depth: *f32,
+	width: i32,
+	height: i32) i32;

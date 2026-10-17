@@ -1,5 +1,5 @@
 // test_cv.pka — Computer vision tests for MuJoCo scene rendering.
-// Renders multiple frames across physics steps. Uses color thresholding
+// Renders unlit model colors across physics steps. Uses color thresholding
 // and centroid tracking to verify:
 //   1. Red ball and blue box visible with correct dominant colors
 //   2. Ball centroid moves downward as it falls under gravity
@@ -7,7 +7,6 @@
 //   4. Ball settles near ground level after many physics steps
 //   5. Region color at each object centroid matches model spec
 
-use fb;
 use fb;
 
 // --- Centroid helpers: weighted center of color-dominant pixels ---
@@ -102,6 +101,14 @@ export fn main() void = {
 	let sc = scene_new();
 	scene_init(&sc);
 
+	// Track model colors, not the scene's decorative ground texture or PBR lighting.
+	let rgba: [4]f32 = [0.0...];
+	for (let i: i32 = 0; i < sc.geom_count; i += 1) {
+		mj_shim_geom_rgba(i, &rgba[0z]);
+		sc.materials[i: size] = material_flat(
+			color_new(rgba[0z], rgba[1z], rgba[2z], rgba[3z]));
+	};
+
 	let geom_pass = util_geom_pass_init();
 	let lights = util_light_buffer_init();
 	let env = env_default();
@@ -120,7 +127,7 @@ export fn main() void = {
 	scene_update(&sc);
 	scene_geom_pass(&sc, &geom_pass);
 	e2_pass_begin(&rt, color_new(0.05, 0.05, 0.08, 1.0));
-	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_PBR,
+	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_CONSTANT_COLOR,
 		geom_pass.draws[0z..(geom_pass.count: size)],
 		util_light_buffer_slice(&lights), &env);
 	e2_pass_end(&rt);
@@ -205,7 +212,7 @@ export fn main() void = {
 	scene_update(&sc);
 	scene_geom_pass(&sc, &geom_pass);
 	e2_pass_begin(&rt, color_new(0.05, 0.05, 0.08, 1.0));
-	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_PBR,
+	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_CONSTANT_COLOR,
 		geom_pass.draws[0z..(geom_pass.count: size)],
 		util_light_buffer_slice(&lights), &env);
 	e2_pass_end(&rt);
@@ -259,7 +266,7 @@ export fn main() void = {
 	scene_update(&sc);
 	scene_geom_pass(&sc, &geom_pass);
 	e2_pass_begin(&rt, color_new(0.05, 0.05, 0.08, 1.0));
-	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_PBR,
+	e2_pass_3d_geom(&rt, &cam, E2_GEOM_MODE_CONSTANT_COLOR,
 		geom_pass.draws[0z..(geom_pass.count: size)],
 		util_light_buffer_slice(&lights), &env);
 	e2_pass_end(&rt);

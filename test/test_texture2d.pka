@@ -58,7 +58,7 @@ export fn main() void = {
 	assert(tex.height == 8, "tex height");
 	fb::Printsln("  test_texture_create: OK");
 
-	let png_path = strings::toutf8("../trellis/vendor/mujoco/model/cube/assets/blue.png");
+	let png_path = strings::toutf8("test/assets/blue.png");
 	let png_tex = e2_gpu_texture_load_png_rgb(png_path.data);
 	assert(png_tex.valid, "png texture loaded");
 	assert(png_tex.width > 0, "png tex width");

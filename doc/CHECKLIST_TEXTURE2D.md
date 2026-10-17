@@ -7,16 +7,16 @@ depth sensor output, camera feeds, and other image data overlaid on the 3D scene
 
 ## Implementation Steps
 
-- [x] **Step 1**: Add texture shim functions to `pollyn_engine/shim/pollyn_shim.c`
+- [x] **Step 1**: Add texture shim functions to `internal/pollyn_engine/shim/pollyn_shim.c`
   - `shim_gl_create_texture_rgb(data, w, h)` → GLuint
   - `shim_gl_update_texture_rgb(tex, data, w, h)`
   - `shim_gl_delete_texture(tex)`
   - `shim_gl_init_blit_shader(vs, fs)` — compile blit shader + VBO
   - `shim_gl_draw_textured_quad(tex, x, y, w, h, screen_w, screen_h)`
 
-- [x] **Step 2**: Add `@symbol` declarations in `pollyn_engine/src/renderer.pka`
+- [x] **Step 2**: Add `@symbol` declarations in `internal/pollyn_engine/src/renderer.pka`
 
-- [x] **Step 3**: Add `E2GpuTexture` type and pass to `pollyn_engine/engine/core_engine.pka`
+- [x] **Step 3**: Add `E2GpuTexture` type and pass to `internal/pollyn_engine/engine/core_engine.pka`
   - `E2GpuTexture` struct (handle, width, height, valid)
   - `e2_gpu_texture_create_rgb(data, w, h) E2GpuTexture`
   - `e2_gpu_texture_update_rgb(tex, data)`
@@ -24,9 +24,9 @@ depth sensor output, camera feeds, and other image data overlaid on the 3D scene
   - `e2_init_blit_shader() bool`
   - `e2_pass_2d_texture(rt, tex, x, y, w, h)` — render textured quad
 
-- [x] **Step 4**: Create blit shader pair `pollyn_engine/shaders/blit.vert` + `blit.frag`
+- [x] **Step 4**: Create blit shader pair `internal/pollyn_engine/shaders/blit.vert` + `blit.frag`
 
-- [x] **Step 5**: Create `trellis2/src/camera_view.pka` module
+- [x] **Step 5**: Create `trellis2/cmd/urc_simulator/camera_view.pka` module
   - `CameraView` struct wrapping a DepthSensor + GPU texture
   - `camera_view_new(...)` — create sensor + configure screen placement
   - `camera_view_render(...)` — render scene to sensor, upload RGB/depth to texture

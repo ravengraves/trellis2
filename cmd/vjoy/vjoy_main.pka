@@ -1,0 +1,389 @@
+use args;
+use fb;
+use math;
+use strings;
+
+// Publisher state belongs to this application; transport calls use ROS3 directly.
+type VjoyPublisher = struct {
+	node: RoseNode,
+	pub: RosePublisher,
+	msg: MirageMsg,
+};
+
+fn vjoy_publish(state: *VjoyPublisher, linear: f64, angular: f64) i64 = {
+	let values: [2]f64 = [linear, angular];
+	let dims: [1]i64 = [2];
+	if (mirage_write_start(state.msg) < 0 ||
+		mirage_write_numericarray(state.msg, MIRAGE_ARRAY_F64, 1,
+			&dims[0], &values[0]: *opaque) < 0) {
+		return -1;
+	};
+	let rc = rose::publish(state.pub, state.msg);
+	rose::spin_once(state.node);
+	return rc;
+};
+
+fn vjoy_shutdown(state: *VjoyPublisher) void = {
+	if (state.pub != 0: uintptr: RosePublisher && state.msg != 0: uintptr: MirageMsg) {
+		vjoy_publish(state, 0.0, 0.0);
+	};
+	if (state.msg != 0: uintptr: MirageMsg) { mirage_destroy(&state.msg); };
+	if (state.node != 0: uintptr: RoseNode) { rose::shutdown(state.node); };
+	state.pub = 0: uintptr: RosePublisher;
+	state.node = 0: uintptr: RoseNode;
+};
+
+def VJOY_SIZE: i32 = 128;
+def VJOY_RADIUS: f32 = 56.0;
+def VJOY_LINEAR_MAX_MPS: f64 = 1.0;
+def VJOY_ANGULAR_MAX_RPS: f64 = 1.5;
+def VJOY_PUBLISH_HZ: u64 = 30u64;
+
+type VjoyRect = struct {
+	x: i32,
+	y: i32,
+	w: i32,
+	h: i32,
+};
+
+type VjoyCli = struct {
+	topic: str,
+	valid: bool,
+	show_help: bool,
+};
+
+fn vjoy_print_usage() void = {
+	fb::Printsln("usage: vjoy [--topic TOPIC] [--terminal] [--half-cell] [--term-lines] [--smoke] [--headless]");
+	fb::Printsln("default: publishes F64[2] [linear_mps, angular_rps] on /cmd_vel");
+};
+
+fn vjoy_parse_cli() VjoyCli = {
+	let cfg = VjoyCli {
+		topic = "/cmd_vel",
+		valid = true,
+		show_help = false,
+	};
+	let argc = args::Count();
+	for (let i: i32 = 1; i < argc; i += 1) {
+		let arg = args::At(i);
+		if (arg == "--help") {
+			cfg.show_help = true;
+			return cfg;
+		};
+		if (arg == "--terminal" || arg == "--headless" || arg == "--half-cell" ||
+			arg == "--term-lines" || arg == "--smoke") {
+			continue;
+		};
+		if (arg == "--topic") {
+			if (i + 1 >= argc) {
+				cfg.valid = false;
+				return cfg;
+			};
+			i = i + 1;
+			cfg.topic = args::At(i);
+			continue;
+		};
+		cfg.valid = false;
+		return cfg;
+	};
+	return cfg;
+};
+
+fn vjoy_target_w(rt: *E2Runtime) i32 = {
+	if (rt.mode == E2_MODE_WINDOW) {
+		return shim_window_width();
+	};
+	return rt.fb.width;
+};
+
+fn vjoy_target_h(rt: *E2Runtime) i32 = {
+	if (rt.mode == E2_MODE_WINDOW) {
+		return shim_window_height();
+	};
+	return rt.fb.height;
+};
+
+fn vjoy_rect_for(rt: *E2Runtime) VjoyRect = {
+	let w = vjoy_target_w(rt);
+	let h = vjoy_target_h(rt);
+	let x = (w - VJOY_SIZE) / 2;
+	let y = 42;
+	if (x < 12) { x = 12; };
+	if (h < 220) {
+		y = (h - VJOY_SIZE) / 2;
+		if (y < 12) { y = 12; };
+	};
+	return VjoyRect { x = x, y = y, w = VJOY_SIZE, h = VJOY_SIZE };
+};
+
+fn vjoy_point_in_rect(px: f32, py: f32, r: *VjoyRect) bool = {
+	return px >= (r.x: f32) && py >= (r.y: f32) &&
+		px <= ((r.x + r.w): f32) && py <= ((r.y + r.h): f32);
+};
+
+fn vjoy_add_rect(buf: *E2CpuColorVertexBuffer,
+	x: i32, y: i32, w: i32, h: i32, c: Color) void = {
+	let p0 = vec3_new(x: f32, y: f32, 0.0);
+	let p1 = vec3_new((x + w): f32, y: f32, 0.0);
+	let p2 = vec3_new((x + w): f32, (y + h): f32, 0.0);
+	let p3 = vec3_new(x: f32, (y + h): f32, 0.0);
+	util_cpu_color_buffer_add_tri(buf, p0, p1, p2, c);
+	util_cpu_color_buffer_add_tri(buf, p0, p2, p3, c);
+};
+
+fn vjoy_add_outline(buf: *E2CpuColorVertexBuffer,
+	x: i32, y: i32, w: i32, h: i32, c: Color) void = {
+	let p0 = vec3_new(x: f32, y: f32, 0.0);
+	let p1 = vec3_new((x + w): f32, y: f32, 0.0);
+	let p2 = vec3_new((x + w): f32, (y + h): f32, 0.0);
+	let p3 = vec3_new(x: f32, (y + h): f32, 0.0);
+	util_cpu_color_buffer_add_line(buf, p0, p1, c);
+	util_cpu_color_buffer_add_line(buf, p1, p2, c);
+	util_cpu_color_buffer_add_line(buf, p2, p3, c);
+	util_cpu_color_buffer_add_line(buf, p3, p0, c);
+};
+
+fn vjoy_add_circle_filled(buf: *E2CpuColorVertexBuffer,
+	cx: f32, cy: f32, radius: f32, c: Color) void = {
+	let segments: i32 = 32;
+	let center = vec3_new(cx, cy, 0.0);
+	for (let i: i32 = 0; i < segments; i += 1) {
+		let a0 = ((i: f32) / (segments: f32)) * math::TAU;
+		let a1 = (((i + 1): f32) / (segments: f32)) * math::TAU;
+		let sc0 = math::sincos(a0);
+		let sc1 = math::sincos(a1);
+		let p0 = vec3_new(cx + sc0.c * radius, cy + sc0.s * radius, 0.0);
+		let p1 = vec3_new(cx + sc1.c * radius, cy + sc1.s * radius, 0.0);
+		util_cpu_color_buffer_add_tri(buf, center, p0, p1, c);
+	};
+};
+
+fn vjoy_add_circle_outline(buf: *E2CpuColorVertexBuffer,
+	cx: f32, cy: f32, radius: f32, c: Color) void = {
+	let segments: i32 = 48;
+	for (let i: i32 = 0; i < segments; i += 1) {
+		let a0 = ((i: f32) / (segments: f32)) * math::TAU;
+		let a1 = (((i + 1): f32) / (segments: f32)) * math::TAU;
+		let sc0 = math::sincos(a0);
+		let sc1 = math::sincos(a1);
+		let p0 = vec3_new(cx + sc0.c * radius, cy + sc0.s * radius, 0.0);
+		let p1 = vec3_new(cx + sc1.c * radius, cy + sc1.s * radius, 0.0);
+		util_cpu_color_buffer_add_line(buf, p0, p1, c);
+	};
+};
+
+fn vjoy_update_drag(rt: *E2Runtime, joy: *VjoyRect,
+	active: *i32, drag_x: *f32, drag_y: *f32) void = {
+	for (let i: i32 = 0; i < rt.input.event_count; i += 1) {
+		let ev = rt.input.events[i: size];
+		if (ev.etype == EVT_MOUSE_PRESS && ev.key == MOUSE_LEFT &&
+			vjoy_point_in_rect(ev.x, ev.y, joy)) {
+			*active = 1;
+			*drag_x = ev.x;
+			*drag_y = ev.y;
+		} else if (ev.etype == EVT_CURSOR_MOVE && *active != 0) {
+			*drag_x = ev.x;
+			*drag_y = ev.y;
+		} else if (ev.etype == EVT_MOUSE_RELEASE && ev.key == MOUSE_LEFT && *active != 0) {
+			*active = 0;
+		};
+	};
+	if (*active != 0 && !rt.input.mouse_left) {
+		*active = 0;
+	};
+};
+
+fn vjoy_command_from_drag(joy: *VjoyRect, active: i32,
+	drag_x: f32, drag_y: f32,
+	out_linear: *f64, out_angular: *f64,
+	out_knob_x: *f32, out_knob_y: *f32) void = {
+	let cx = (joy.x: f32) + ((joy.w: f32) * 0.5);
+	let cy = (joy.y: f32) + ((joy.h: f32) * 0.5);
+	if (active == 0) {
+		*out_linear = 0.0;
+		*out_angular = 0.0;
+		*out_knob_x = cx;
+		*out_knob_y = cy;
+		return;
+	};
+
+	let dx = drag_x - cx;
+	let dy = drag_y - cy;
+	let mag = math::sqrt(dx * dx + dy * dy);
+	if (mag > VJOY_RADIUS) {
+		let s = VJOY_RADIUS / mag;
+		dx = dx * s;
+		dy = dy * s;
+	};
+
+	let nx = dx / VJOY_RADIUS;
+	let ny = -dy / VJOY_RADIUS;
+	*out_linear = (ny: f64) * VJOY_LINEAR_MAX_MPS;
+	*out_angular = (-(nx: f64)) * VJOY_ANGULAR_MAX_RPS;
+	*out_knob_x = cx + dx;
+	*out_knob_y = cy + dy;
+};
+
+fn vjoy_draw(rt: *E2Runtime, joy: *VjoyRect,
+	active: i32, knob_x: f32, knob_y: f32) void = {
+	let cx = (joy.x: f32) + ((joy.w: f32) * 0.5);
+	let cy = (joy.y: f32) + ((joy.h: f32) * 0.5);
+	let fill_cpu = util_cpu_color_buffer_init();
+	vjoy_add_rect(&fill_cpu, joy.x, joy.y, joy.w, joy.h,
+		color_new(0.12, 0.14, 0.17, 1.0));
+	vjoy_add_circle_filled(&fill_cpu, cx, cy, VJOY_RADIUS,
+		color_new(0.17, 0.20, 0.24, 1.0));
+	vjoy_add_circle_filled(&fill_cpu, knob_x, knob_y, 8.0,
+		color_new(0.96, 0.76, 0.32, 1.0));
+	let fill_gpu = util_color_upload(&fill_cpu);
+	let fill_pass = util_color_pass_init();
+	util_color_pass_add(&fill_pass, &fill_gpu, 1.0);
+	e2_pass_2d_geom(rt, fill_pass.draws[0z..(fill_pass.count: size)]);
+	e2_gpu_color_destroy(&fill_gpu);
+
+	let line_cpu = util_cpu_color_buffer_init();
+	let faint = color_new(0.34, 0.39, 0.46, 1.0);
+	vjoy_add_outline(&line_cpu, joy.x, joy.y, joy.w, joy.h, faint);
+	vjoy_add_circle_outline(&line_cpu, cx, cy, VJOY_RADIUS, faint);
+	util_cpu_color_buffer_add_line(&line_cpu,
+		vec3_new((joy.x + (joy.w / 2)): f32, joy.y: f32, 0.0),
+		vec3_new((joy.x + (joy.w / 2)): f32, (joy.y + joy.h): f32, 0.0),
+		color_new(0.24, 0.28, 0.34, 1.0));
+	util_cpu_color_buffer_add_line(&line_cpu,
+		vec3_new(joy.x: f32, (joy.y + (joy.h / 2)): f32, 0.0),
+		vec3_new((joy.x + joy.w): f32, (joy.y + (joy.h / 2)): f32, 0.0),
+		color_new(0.24, 0.28, 0.34, 1.0));
+	if (active != 0) {
+		util_cpu_color_buffer_add_line(&line_cpu,
+			vec3_new(cx, cy, 0.0),
+			vec3_new(knob_x, knob_y, 0.0),
+			color_new(0.97, 0.62, 0.18, 1.0));
+	};
+	let line_gpu = util_color_upload(&line_cpu);
+	let line_pass = util_color_pass_init();
+	util_color_pass_add(&line_pass, &line_gpu, 2.0);
+	e2_pass_2d_lines(rt, line_pass.draws[0z..(line_pass.count: size)]);
+	e2_gpu_color_destroy(&line_gpu);
+};
+
+fn vjoy_text_px(rt: *E2Runtime, x: i32, y: i32, s: str,
+	r: u8, g: u8, b: u8) void = {
+	let w = vjoy_target_w(rt);
+	let h = vjoy_target_h(rt);
+	e2_text_add(rt, (x: f32) / (w: f32), (y: f32) / (h: f32), s, r, g, b);
+};
+
+fn vjoy_draw_text(rt: *E2Runtime, joy: *VjoyRect,
+	topic: str, linear: f64, angular: f64, active: i32) void = {
+	let y0 = joy.y + joy.h + 20;
+	let buf0: [128]u8 = [0...];
+	let tf0 = fb::New(buf0[0z..128z]);
+	fb::Write(&tf0, "topic ");
+	fb::Write(&tf0, topic);
+	vjoy_text_px(rt, joy.x, y0, fb::ToStr(&tf0), 220u8, 226u8, 235u8);
+
+	let buf1: [128]u8 = [0...];
+	let tf1 = fb::New(buf1[0z..128z]);
+	fb::Write(&tf1, "linear ");
+	fb::Wf64(&tf1, linear, 2, "fix");
+	fb::Write(&tf1, " m/s");
+	vjoy_text_px(rt, joy.x, y0 + 18, fb::ToStr(&tf1), 210u8, 230u8, 255u8);
+
+	let buf2: [128]u8 = [0...];
+	let tf2 = fb::New(buf2[0z..128z]);
+	fb::Write(&tf2, "angular ");
+	fb::Wf64(&tf2, angular, 2, "fix");
+	fb::Write(&tf2, " rad/s");
+	vjoy_text_px(rt, joy.x, y0 + 36, fb::ToStr(&tf2), 255u8, 224u8, 180u8);
+
+	if (active != 0) {
+		vjoy_text_px(rt, joy.x, y0 + 54, "dragging", 246u8, 202u8, 95u8);
+	} else {
+		vjoy_text_px(rt, joy.x, y0 + 54, "released zeros", 178u8, 187u8, 201u8);
+	};
+};
+
+export fn main() void = {
+	let cli = vjoy_parse_cli();
+	if (!cli.valid || cli.show_help) {
+		vjoy_print_usage();
+		return;
+	};
+
+	let mode = E2_MODE_WINDOW;
+	if (args::Has("--terminal")) {
+		mode = E2_MODE_TERMINAL;
+	} else if (args::Has("--headless")) {
+		mode = E2_MODE_HEADLESS;
+	};
+	let smoke = args::Has("--smoke");
+
+	let rt = e2_runtime_init(mode, 420, 260);
+	if (args::Has("--half-cell")) {
+		rt.term_style = E2_TERM_HALF_CELL;
+	};
+	if (args::Has("--term-lines")) {
+		rt.term_present_mode = E2_TERM_PRESENT_LINES;
+	};
+	rt.target_fps = VJOY_PUBLISH_HZ: i32;
+	if (!e2_runtime_start(&rt)) {
+		fb::Printsln("vjoy: engine start failed");
+		return;
+	};
+
+	let state = VjoyPublisher {
+		node = rose::create_node("vjoy", ""),
+		pub = 0: uintptr: RosePublisher,
+		msg = 0: uintptr: MirageMsg,
+	};
+	if (state.node != 0: uintptr: RoseNode) {
+		state.pub = rose::create_pub(state.node, cli.topic, 256u64, VJOY_PUBLISH_HZ);
+		state.msg = mirage_create(256);
+	};
+	if (state.node == 0: uintptr: RoseNode || state.pub == 0: uintptr: RosePublisher ||
+		state.msg == 0: uintptr: MirageMsg) {
+		fb::Printsln("vjoy: ros3 publisher init failed");
+		vjoy_shutdown(&state);
+		e2_runtime_shutdown(&rt);
+		return;
+	};
+
+	let active: i32 = 0;
+	let drag_x: f32 = 0.0;
+	let drag_y: f32 = 0.0;
+	let linear: f64 = 0.0;
+	let angular: f64 = 0.0;
+	let knob_x: f32 = 0.0;
+	let knob_y: f32 = 0.0;
+	let frames: i32 = 0;
+	let publish_ok = true;
+
+	for (e2_runtime_should_run(&rt)) {
+		e2_runtime_begin_frame(&rt);
+		let joy = vjoy_rect_for(&rt);
+		vjoy_update_drag(&rt, &joy, &active, &drag_x, &drag_y);
+		vjoy_command_from_drag(&joy, active, drag_x, drag_y,
+			&linear, &angular, &knob_x, &knob_y);
+		if (vjoy_publish(&state, linear, angular) < 0) {
+			publish_ok = false;
+		};
+
+		e2_pass_begin(&rt, color_new(0.07, 0.08, 0.10, 1.0));
+		vjoy_draw(&rt, &joy, active, knob_x, knob_y);
+		e2_pass_end(&rt);
+		vjoy_draw_text(&rt, &joy, cli.topic, linear, angular, active);
+		if (!publish_ok) {
+			vjoy_text_px(&rt, joy.x, joy.y - 18, "publish failed", 255u8, 120u8, 100u8);
+		};
+		e2_pass_text(&rt);
+		e2_runtime_present(&rt);
+
+		frames = frames + 1;
+		if (smoke && frames >= 2) {
+			rt.running = false;
+		};
+	};
+
+	vjoy_shutdown(&state);
+	e2_runtime_shutdown(&rt);
+};

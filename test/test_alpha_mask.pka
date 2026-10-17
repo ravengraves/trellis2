@@ -44,12 +44,12 @@ fn count_rgb_region(pixels: []u8, w: i32,
 
 fn count_depth_region(depth: []f32, w: i32,
 	x0: i32, y0: i32, x1: i32, y1: i32,
-	min_depth: f32) i32 = {
+	max_depth: f32) i32 = {
 	let count: i32 = 0;
 	for (let py: i32 = y0; py < y1; py += 1) {
 		for (let px: i32 = x0; px < x1; px += 1) {
 			let idx: size = (py * w + px): size;
-			if (depth[idx] > min_depth) {
+			if (depth[idx] > 0.0 && depth[idx] < max_depth) {
 				count = count + 1;
 			};
 		};
@@ -164,7 +164,8 @@ export fn main() void = {
 		76, 24, 108, 72);
 	let depth_visible_max = depth_left_max;
 	let depth_hidden_max = depth_right_max;
-	if (depth_right_max > depth_left_max) {
+	// Use the color pass to identify the opaque half; nearer depth is smaller.
+	if (const_right > const_left) {
 		depth_visible_max = depth_right_max;
 		depth_hidden_max = depth_left_max;
 	};
@@ -189,7 +190,7 @@ export fn main() void = {
 	fb::Write(&depth_tf, " threshold=");
 	fb::Wf64(&depth_tf, depth_threshold: f64, 4, "dec");
 	fb::Println(&depth_tf);
-	assert(depth_visible_max > depth_hidden_max + 0.02,
+	assert(depth_visible_max + 0.02 < depth_hidden_max,
 		"depth output separates opaque and transparent halves");
 	assert(depth_hidden_max > 19.0,
 		"transparent half keeps far-depth background");

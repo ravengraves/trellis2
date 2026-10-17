@@ -1,0 +1,56 @@
+# Loaded from the repository root; reuse its tools, source lists, and setup targets.
+rule pika_tests
+  command = mkdir -p build && for name in $names; do $
+    echo "BUILD test_$$name"; $
+    $pikacc $sources test/test_$$name.pka $shims $pikaflags --cc "$cc" --platform libc -o build/test_$$name -- $cc_args $system_libs || exit $$?; $
+    done
+  pool = console
+
+build build/test_object_draw_colors build/test_alpha_mask build/test_pbr_ibl build/test_pbr_multi_light build/test_pbr_normal_map build/test_pbr_orm build/test_dust build/test_radiation build/test_laser_glare build/test_pbr_terminal_room build/test_pollyn_2d: pika_tests test/test_object_draw_colors.pka test/test_alpha_mask.pka test/test_pbr_ibl.pka test/test_pbr_multi_light.pka test/test_pbr_normal_map.pka test/test_pbr_orm.pka test/test_dust.pka test/test_radiation.pka test/test_laser_glare.pka test/test_pbr_terminal_room.pka test/test_pollyn_2d.pka build/engine.stamp
+  names = object_draw_colors alpha_mask pbr_ibl pbr_multi_light pbr_normal_map pbr_orm dust radiation laser_glare pbr_terminal_room pollyn_2d
+  sources = $engine
+  shims = $engine_shim
+  cc_args = $engine_cflags $gl_libs
+build check_graphics: phony build/test_object_draw_colors build/test_alpha_mask build/test_pbr_ibl build/test_pbr_multi_light build/test_pbr_normal_map build/test_pbr_orm build/test_dust build/test_radiation build/test_laser_glare build/test_pbr_terminal_room build/test_pollyn_2d
+
+build build/test_physics build/test_render build/test_cv build/test_depth build/test_texture2d build/test_env_static_asset: pika_tests test/test_physics.pka test/test_render.pka test/test_cv.pka test/test_depth.pka test/test_texture2d.pka test/test_env_static_asset.pka build/engine.stamp build/scene.stamp internal/shim/mujoco_shim.c | build/mujoco.stamp
+  names = physics render cv depth texture2d env_static_asset
+  sources = $engine $scene
+  shims = $engine_shim internal/shim/mujoco_shim.c
+  cc_args = $physics_flags
+build check_physics: phony build/test_physics build/test_render build/test_cv build/test_depth build/test_texture2d build/test_env_static_asset
+
+build build/test_camera_intrinsics: pika_tests test/test_camera_intrinsics.pka internal/pollyn_engine/src/math3d.pka internal/pollyn_engine/src/camera.pka
+  names = camera_intrinsics
+  sources = internal/pollyn_engine/src/math3d.pka internal/pollyn_engine/src/camera.pka
+build check_camera_intrinsics: phony build/test_camera_intrinsics
+
+build build/test_robot_motion: pika_tests test/test_robot_motion.pka build/engine.stamp build/scene.stamp internal/bindings/ros3/ros3.pka cmd/urc_simulator/robot_sim.pka | build/mujoco.stamp build/robot_shim.o
+  names = robot_motion
+  sources = $engine $scene internal/bindings/ros3/ros3.pka cmd/urc_simulator/robot_sim.pka
+  shims = $engine_shim
+  cc_args = $engine_cflags $mujoco_cflags $rose_cflags build/robot_shim.o $mujoco_libs $rose_libs $gl_libs
+build check_robot_motion: phony build/test_robot_motion
+
+build tests: phony check_graphics check_physics check_camera_intrinsics check_robot_motion
+
+# Build all test binaries before running the automated checks.
+build check: shell tests
+  cmd = export LIBGL_ALWAYS_SOFTWARE=1 && $
+    ./build/test_physics && $
+    ./build/test_env_static_asset && $
+    ./build/test_camera_intrinsics && $
+    ./build/test_robot_motion && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_object_draw_colors && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_alpha_mask && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_pbr_ibl && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_pbr_multi_light && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_pbr_normal_map && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_pbr_orm && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_dust && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_radiation && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_laser_glare && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_render && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_cv && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_depth && $
+    xvfb-run -a -s "-screen 0 1280x800x24" ./build/test_texture2d

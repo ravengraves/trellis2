@@ -1,0 +1,66 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang llvm lld git curl \
+            python3 python3-pip ninja-build pkg-config scdoc \
+            libglfw3-dev libgles2-mesa-dev libegl1-mesa-dev xvfb xauth
+
+      - name: Install Pika using its public installer
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://raw.githubusercontent.com/ravengraves/pika/master/install.sh \
+            --output pika-install.sh
+          sh pika-install.sh
+          command -v pika2c
+          command -v pikacc
+
+      - name: Install ROS3 using its public installer
+        working-directory: ${{ runner.temp }}
+        run: |
+          # The installer selects ./rose when it exists.
+          mkdir -p rose
+          curl --fail --silent --show-error --location --retry 3 \
+            https://raw.githubusercontent.com/ravengraves/ros3/master/install.sh \
+            --output ros3-install.sh
+          sh ros3-install.sh
+          sudo ldconfig
+
+      - name: Build rover simulator
+        run: ninja urc_simulator
+
+      - name: Build model viewer
+        run: ninja trellis2
+
+      - name: Build image viewer
+        run: ninja image_view
+
+      - name: Build virtual joystick
+        run: ninja vjoy
+
+      - name: Run checks
+        run: ninja check

@@ -8,6 +8,9 @@
 
 enum {
     IMAGE_VIEW_TOPIC_BYTES = 256,
+    IMAGE_VIEW_BBOX_NAME_BYTES = 64,
+    IMAGE_VIEW_INITIAL_BOX_CAPACITY = 64,
+    IMAGE_VIEW_BBOX_BUFFER_BYTES = 256 * 1024,
     IMAGE_VIEW_MAX_IMAGE_RANK = 3,
     IMAGE_VIEW_DEFAULT_BUFFER_BYTES = 8 * 1024 * 1024,
     IMAGE_VIEW_CONNECT_RETRY_NS = 250000000ULL,
@@ -34,6 +37,7 @@ typedef enum {
 
 typedef struct {
     char input_topic[IMAGE_VIEW_TOPIC_BYTES];
+    char bbox_topic[IMAGE_VIEW_TOPIC_BYTES];
     int width;
     int height;
     int channels;
@@ -51,15 +55,36 @@ typedef struct {
     mirage_array_type type;
 } image_spec;
 
+typedef struct {
+    double xmin;
+    double ymin;
+    double xmax;
+    double ymax;
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    char name[IMAGE_VIEW_BBOX_NAME_BYTES];
+    int name_len;
+    int valid;
+} image_view_bbox;
+
 static image_view_options g_options;
 static rose_node *g_node = NULL;
 static rose_subscriber *g_sub = NULL;
+static rose_subscriber *g_bbox_sub = NULL;
 static mirage_msg *g_msg = NULL;
+static mirage_msg *g_bbox_msg = NULL;
 static uint8_t *g_raw = NULL;
 static uint64_t g_seq = 0;
 static uint64_t g_last_retry_ns = 0;
+static uint64_t g_bbox_last_retry_ns = 0;
 static int g_payload_size = 0;
 static int g_status = IMAGE_VIEW_STATUS_STARTING;
+static image_view_bbox *g_bboxes = NULL;
+static int g_bbox_capacity = 0;
+static image_view_bbox *g_bbox_scratch = NULL;
+static int g_bbox_scratch_capacity = 0;
+static int g_bbox_count = 0;
 
 void image_view_bridge_shutdown(void);
 
@@ -646,6 +671,281 @@ static int image_view_decode_message_rgb(mirage_msg *msg,
     return (int)pixels;
 }
 
+static int image_view_bbox_enabled(void) {
+    return g_options.bbox_topic[0] != '\0';
+}
+
+static void image_view_clear_bboxes(void) {
+    g_bbox_count = 0;
+}
+
+static int image_view_reserve_bboxes(image_view_bbox **boxes,
+                                     int *capacity,
+                                     int required) {
+    int new_capacity = 0;
+    image_view_bbox *resized = NULL;
+
+    if (!boxes || !capacity || required < 0) {
+        return 0;
+    }
+    if (required <= *capacity) {
+        return 1;
+    }
+
+    new_capacity = *capacity > 0 ? *capacity : IMAGE_VIEW_INITIAL_BOX_CAPACITY;
+    while (new_capacity < required) {
+        if (new_capacity > INT32_MAX / 2) {
+            return 0;
+        }
+        new_capacity *= 2;
+    }
+
+    resized = (image_view_bbox *)realloc(*boxes,
+                                         sizeof(**boxes) * (size_t)new_capacity);
+    if (!resized) {
+        return 0;
+    }
+    memset(&resized[*capacity],
+           0,
+           sizeof(*resized) * (size_t)(new_capacity - *capacity));
+    *boxes = resized;
+    *capacity = new_capacity;
+    return 1;
+}
+
+static uint8_t image_view_bbox_color(double value) {
+    if (!isfinite(value) || value <= 0.0) {
+        return 0u;
+    }
+    if (value <= 1.0) {
+        value *= 255.0;
+    }
+    if (value >= 255.0) {
+        return 255u;
+    }
+    return (uint8_t)lround(value);
+}
+
+static int image_view_name_eq(const char *name,
+                              int64_t name_len,
+                              const char *expected) {
+    int64_t expected_len = 0;
+    if (!name || !expected || name_len < 0) {
+        return 0;
+    }
+    expected_len = (int64_t)strlen(expected);
+    return name_len == expected_len && memcmp(name, expected, (size_t)name_len) == 0;
+}
+
+static int image_view_read_number_f64(mirage_msg *msg, double *out_value) {
+    mirage_element_type elem_type = MIRAGE_F64;
+    int8_t value_i8 = 0;
+    int16_t value_i16 = 0;
+    int32_t value_i32 = 0;
+    int64_t value_i64 = 0;
+
+    if (!msg || !out_value || mirage_peek_element_type(msg, &elem_type) < 0) {
+        return 0;
+    }
+
+    switch (elem_type) {
+        case MIRAGE_F64:
+            return mirage_read_f64(msg, out_value) >= 0;
+        case MIRAGE_I8:
+            if (mirage_read_i8(msg, &value_i8) < 0) {
+                return 0;
+            }
+            *out_value = (double)value_i8;
+            return 1;
+        case MIRAGE_I16:
+            if (mirage_read_i16(msg, &value_i16) < 0) {
+                return 0;
+            }
+            *out_value = (double)value_i16;
+            return 1;
+        case MIRAGE_I32:
+            if (mirage_read_i32(msg, &value_i32) < 0) {
+                return 0;
+            }
+            *out_value = (double)value_i32;
+            return 1;
+        case MIRAGE_I64:
+            if (mirage_read_i64(msg, &value_i64) < 0) {
+                return 0;
+            }
+            *out_value = (double)value_i64;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int image_view_decode_bbox_values(mirage_msg *msg,
+                                         int64_t fn_argc,
+                                         image_view_bbox *out_bbox) {
+    double color_r = 255.0;
+    double color_g = 224.0;
+    double color_b = 64.0;
+    int64_t name_len = 0;
+    image_view_bbox box;
+
+    if (!msg || !out_bbox) {
+        return 0;
+    }
+
+    if (fn_argc != 4 && fn_argc != 5 && fn_argc != 7 && fn_argc != 8) {
+        return 0;
+    }
+
+    memset(&box, 0, sizeof(box));
+    box.r = 255u;
+    box.g = 224u;
+    box.b = 64u;
+
+    if (!image_view_read_number_f64(msg, &box.xmin) ||
+        !image_view_read_number_f64(msg, &box.ymin) ||
+        !image_view_read_number_f64(msg, &box.xmax) ||
+        !image_view_read_number_f64(msg, &box.ymax)) {
+        return 0;
+    }
+
+    if (fn_argc == 5) {
+        if (mirage_read_string(msg, box.name, &name_len,
+                               (int64_t)sizeof(box.name) - 1) < 0) {
+            return 0;
+        }
+    } else if (fn_argc >= 7) {
+        if (!image_view_read_number_f64(msg, &color_r) ||
+            !image_view_read_number_f64(msg, &color_g) ||
+            !image_view_read_number_f64(msg, &color_b)) {
+            return 0;
+        }
+        box.r = image_view_bbox_color(color_r);
+        box.g = image_view_bbox_color(color_g);
+        box.b = image_view_bbox_color(color_b);
+        if (fn_argc == 8 &&
+            mirage_read_string(msg, box.name, &name_len,
+                               (int64_t)sizeof(box.name) - 1) < 0) {
+            return 0;
+        }
+    }
+
+    if (!isfinite(box.xmin) || !isfinite(box.ymin) ||
+        !isfinite(box.xmax) || !isfinite(box.ymax)) {
+        return 0;
+    }
+
+    if (name_len < 0) {
+        name_len = 0;
+    }
+    if (name_len >= (int64_t)sizeof(box.name)) {
+        name_len = (int64_t)sizeof(box.name) - 1;
+    }
+    box.name[name_len] = '\0';
+    box.name_len = (int)name_len;
+    box.valid = 1;
+    *out_bbox = box;
+    return 1;
+}
+
+static int image_view_decode_bbox_list(mirage_msg *msg, image_view_bbox *out_bbox) {
+    char fn_name[32];
+    int64_t fn_len = 0;
+    int64_t fn_argc = 0;
+
+    if (!msg || !out_bbox) {
+        return 0;
+    }
+    if (mirage_read_fn(msg, fn_name, &fn_len, (int64_t)sizeof(fn_name) - 1, &fn_argc) < 0 ||
+        !image_view_name_eq(fn_name, fn_len, "List")) {
+        return 0;
+    }
+    return image_view_decode_bbox_values(msg, fn_argc, out_bbox);
+}
+
+static int image_view_count_bbox_message(mirage_msg *msg, int *out_count) {
+    char fn_name[32];
+    int64_t fn_len = 0;
+    int64_t fn_argc = 0;
+    mirage_element_type elem_type = MIRAGE_FUNCTION;
+    static const uint8_t kEmptyList[] = {'8', ':', 'f', 0, 's', 4, 'L', 'i', 's', 't'};
+
+    if (!msg || !out_count) {
+        return 0;
+    }
+    *out_count = 0;
+    if (msg->length == (int64_t)sizeof(kEmptyList) &&
+        memcmp(msg->data, kEmptyList, sizeof(kEmptyList)) == 0) {
+        return 1;
+    }
+    if (mirage_read_start(msg) < 0 ||
+        mirage_read_fn(msg, fn_name, &fn_len, (int64_t)sizeof(fn_name) - 1, &fn_argc) < 0 ||
+        !image_view_name_eq(fn_name, fn_len, "List") ||
+        fn_argc < 0 ||
+        fn_argc > INT32_MAX) {
+        return 0;
+    }
+    if (fn_argc == 0) {
+        return 1;
+    }
+    if (mirage_peek_element_type(msg, &elem_type) < 0) {
+        return 0;
+    }
+
+    *out_count = elem_type == MIRAGE_FUNCTION ? (int)fn_argc : 1;
+    return 1;
+}
+
+static int image_view_decode_bboxes(mirage_msg *msg,
+                                    image_view_bbox *out_boxes,
+                                    int max_boxes,
+                                    int *out_count) {
+    char fn_name[32];
+    int64_t fn_len = 0;
+    int64_t fn_argc = 0;
+    mirage_element_type elem_type = MIRAGE_FUNCTION;
+    int count = 0;
+    int64_t i = 0;
+
+    if (!msg || !out_boxes || max_boxes < 0 || !out_count) {
+        return 0;
+    }
+    *out_count = 0;
+    if (mirage_read_start(msg) < 0 ||
+        mirage_read_fn(msg, fn_name, &fn_len, (int64_t)sizeof(fn_name) - 1, &fn_argc) < 0 ||
+        !image_view_name_eq(fn_name, fn_len, "List") ||
+        fn_argc < 0) {
+        return 0;
+    }
+    if (fn_argc == 0) {
+        return 1;
+    }
+
+    if (mirage_peek_element_type(msg, &elem_type) < 0) {
+        return 0;
+    }
+
+    if (elem_type != MIRAGE_FUNCTION) {
+        if (max_boxes < 1) {
+            return 1;
+        }
+        if (!image_view_decode_bbox_values(msg, fn_argc, &out_boxes[0])) {
+            return 0;
+        }
+        *out_count = 1;
+        return 1;
+    }
+
+    for (i = 0; i < fn_argc && count < max_boxes; ++i) {
+        if (!image_view_decode_bbox_list(msg, &out_boxes[count])) {
+            return 0;
+        }
+        ++count;
+    }
+    *out_count = count;
+    return 1;
+}
+
 static void image_view_sleep_ns(uint64_t ns) {
     if (ns > 0) {
         rose_nanosleep((double)ns);
@@ -673,6 +973,73 @@ static int image_view_try_connect(uint64_t now_ns) {
     return 1;
 }
 
+static int image_view_try_connect_bbox(uint64_t now_ns) {
+    if (!image_view_bbox_enabled()) {
+        return 0;
+    }
+    if (g_bbox_sub) {
+        return 1;
+    }
+    if (now_ns - g_bbox_last_retry_ns < IMAGE_VIEW_CONNECT_RETRY_NS) {
+        return 0;
+    }
+    g_bbox_last_retry_ns = now_ns;
+    g_bbox_sub = rose_create_sub(g_node,
+                                 g_options.bbox_topic,
+                                 -1,
+                                 1u,
+                                 NULL);
+    return g_bbox_sub != NULL;
+}
+
+static void image_view_poll_bbox(uint64_t now_ns) {
+    int64_t read_rc = 0;
+    image_view_bbox *swap_boxes = NULL;
+    int swap_capacity = 0;
+    int expected_count = 0;
+    int box_count = 0;
+
+    if (!image_view_bbox_enabled() || !g_node || !g_bbox_msg) {
+        return;
+    }
+    if (!image_view_try_connect_bbox(now_ns)) {
+        return;
+    }
+
+    g_bbox_msg->length = g_bbox_msg->max_length;
+    read_rc = rose_readlast(g_bbox_sub, g_bbox_msg);
+    if (read_rc >= 0) {
+        g_bbox_msg->cursor = 0;
+        if (!image_view_count_bbox_message(g_bbox_msg, &expected_count)) {
+            return;
+        }
+        if (expected_count == 0) {
+            image_view_clear_bboxes();
+            return;
+        }
+        if (!image_view_reserve_bboxes(&g_bbox_scratch,
+                                       &g_bbox_scratch_capacity,
+                                       expected_count)) {
+            return;
+        }
+        if (!image_view_decode_bboxes(g_bbox_msg,
+                                      g_bbox_scratch,
+                                      g_bbox_scratch_capacity,
+                                      &box_count)) {
+            return;
+        }
+
+        swap_boxes = g_bboxes;
+        swap_capacity = g_bbox_capacity;
+        g_bboxes = g_bbox_scratch;
+        g_bbox_capacity = g_bbox_scratch_capacity;
+        g_bbox_scratch = swap_boxes;
+        g_bbox_scratch_capacity = swap_capacity;
+        g_bbox_count = box_count;
+        return;
+    }
+}
+
 static int image_view_wait_for_initial_connection(void) {
     fprintf(stderr,
             "image_view: waiting for topic connection: %s\n",
@@ -693,6 +1060,7 @@ static int image_view_wait_for_initial_connection(void) {
 }
 
 int32_t image_view_bridge_init(uint8_t *topic,
+                               uint8_t *bbox_topic,
                                int32_t width,
                                int32_t height,
                                int32_t channels,
@@ -700,7 +1068,7 @@ int32_t image_view_bridge_init(uint8_t *topic,
                                int32_t latest_only) {
     char node_name[] = "image_view";
     char *argv[] = {node_name, NULL};
-    if (!topic || topic[0] == 0 || width < 0 || height < 0 ||
+    if (!topic || topic[0] == 0 || !bbox_topic || width < 0 || height < 0 ||
         channels < 0 || input_buffer_size <= 0 ||
         (latest_only != 0 && latest_only != 1)) {
         fprintf(stderr, "image_view: invalid init parameters\n");
@@ -709,6 +1077,7 @@ int32_t image_view_bridge_init(uint8_t *topic,
 
     memset(&g_options, 0, sizeof(g_options));
     snprintf(g_options.input_topic, sizeof(g_options.input_topic), "%s", (char *)topic);
+    snprintf(g_options.bbox_topic, sizeof(g_options.bbox_topic), "%s", (char *)bbox_topic);
     g_options.width = width;
     g_options.height = height;
     g_options.channels = channels;
@@ -738,15 +1107,32 @@ int32_t image_view_bridge_init(uint8_t *topic,
         return -1;
     }
 
+    if (image_view_bbox_enabled()) {
+        g_bbox_msg = mirage_create(IMAGE_VIEW_BBOX_BUFFER_BYTES, NULL);
+        if (!g_bbox_msg) {
+            fprintf(stderr, "image_view: failed to allocate bbox buffer\n");
+            free(g_raw);
+            g_raw = NULL;
+            mirage_destroy(&g_msg, NULL);
+            rose_shutdown(g_node);
+            g_node = NULL;
+            return -1;
+        }
+    }
+
     g_sub = NULL;
+    g_bbox_sub = NULL;
     g_seq = 0;
     g_last_retry_ns = 0;
+    g_bbox_last_retry_ns = 0;
     g_payload_size = 0;
     g_status = IMAGE_VIEW_STATUS_WAITING_FOR_SUBSCRIBER;
+    g_bbox_count = 0;
 
     fprintf(stderr,
-            "image_view: topic=%s fallback=%dx%dx%d latest_only=%d buffer=%llu\n",
+            "image_view: topic=%s bbox_topic=%s fallback=%dx%dx%d latest_only=%d buffer=%llu\n",
             g_options.input_topic,
+            image_view_bbox_enabled() ? g_options.bbox_topic : "(none)",
             g_options.width,
             g_options.height,
             g_options.channels,
@@ -764,19 +1150,35 @@ void image_view_bridge_shutdown(void) {
     if (g_msg) {
         mirage_destroy(&g_msg, NULL);
     }
+    if (g_bbox_msg) {
+        mirage_destroy(&g_bbox_msg, NULL);
+    }
     if (g_raw) {
         free(g_raw);
         g_raw = NULL;
+    }
+    if (g_bboxes) {
+        free(g_bboxes);
+        g_bboxes = NULL;
+    }
+    if (g_bbox_scratch) {
+        free(g_bbox_scratch);
+        g_bbox_scratch = NULL;
     }
     if (g_node) {
         rose_shutdown(g_node);
         g_node = NULL;
     }
     g_sub = NULL;
+    g_bbox_sub = NULL;
     g_seq = 0;
     g_last_retry_ns = 0;
+    g_bbox_last_retry_ns = 0;
     g_payload_size = 0;
     g_status = IMAGE_VIEW_STATUS_STARTING;
+    g_bbox_capacity = 0;
+    g_bbox_scratch_capacity = 0;
+    g_bbox_count = 0;
 }
 
 void image_view_bridge_poll(void) {
@@ -790,6 +1192,7 @@ void image_view_bridge_poll(void) {
     wait_start = rose_now();
     while (rose_ok(g_node)) {
         rose_spin_once(g_node);
+        image_view_poll_bbox(rose_now());
 
         if (!image_view_try_connect(rose_now())) {
             image_view_sleep_ns(IMAGE_VIEW_IDLE_SLEEP_NS);
@@ -800,6 +1203,7 @@ void image_view_bridge_poll(void) {
         read_rc = g_options.latest_only ? rose_readlast(g_sub, g_msg) : rose_read(g_sub, g_msg);
         if (read_rc >= 0) {
             g_payload_size = (int)g_msg->length;
+            g_msg->cursor = 0;
             g_seq += 1;
             g_status = IMAGE_VIEW_STATUS_FRAME_READY;
             return;
@@ -829,6 +1233,56 @@ int image_view_bridge_status(void) {
 
 int image_view_bridge_payload_size(void) {
     return g_payload_size;
+}
+
+int image_view_bridge_bbox_count(void) {
+    if (g_node && rose_ok(g_node) && image_view_bbox_enabled()) {
+        rose_spin_once(g_node);
+        image_view_poll_bbox(rose_now());
+    }
+    return g_bbox_count;
+}
+
+int image_view_bridge_copy_bbox(int index,
+                                double *out_xmin,
+                                double *out_ymin,
+                                double *out_xmax,
+                                double *out_ymax,
+                                int *out_r,
+                                int *out_g,
+                                int *out_b,
+                                uint8_t *out_name,
+                                int out_name_size) {
+    int copy_len = 0;
+    const image_view_bbox *box = NULL;
+
+    if (!g_bboxes || index < 0 || index >= g_bbox_count) {
+        return 0;
+    }
+    box = &g_bboxes[index];
+
+    if (!box->valid || !out_xmin || !out_ymin || !out_xmax || !out_ymax ||
+        !out_r || !out_g || !out_b || !out_name || out_name_size <= 0) {
+        return 0;
+    }
+
+    *out_xmin = box->xmin;
+    *out_ymin = box->ymin;
+    *out_xmax = box->xmax;
+    *out_ymax = box->ymax;
+    *out_r = (int)box->r;
+    *out_g = (int)box->g;
+    *out_b = (int)box->b;
+
+    copy_len = box->name_len;
+    if (copy_len > out_name_size - 1) {
+        copy_len = out_name_size - 1;
+    }
+    if (copy_len > 0) {
+        memcpy(out_name, box->name, (size_t)copy_len);
+    }
+    out_name[copy_len] = 0u;
+    return copy_len + 1;
 }
 
 int image_view_bridge_copy_rgb(uint8_t *out_rgb,

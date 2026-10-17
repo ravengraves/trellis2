@@ -1,6 +1,6 @@
 # Trellis2 Robot Simulator Checklist
 
-- [x] Define the first implementation milestone as a separate `robot_sim` target instead of replacing the existing `trellis2` viewer.
+- [x] Use `urc_simulator` as the main/default target; retain `trellis2` as the simple viewer.
 - [x] Freeze MuJoCo reads behind a per-frame snapshot API so rendering can read a consistent world state while physics runs elsewhere.
 - [x] Add body-pose accessors needed for robot-mounted camera sensors.
 - [ ] Move MuJoCo stepping onto a dedicated physics thread.
@@ -11,9 +11,9 @@
 - [ ] Add a `d` hotkey to toggle the camera overlay between RGB and depth.
 - [ ] Add focused build verification for the new robot simulator target.
 
-## Current defaults for the first milestone
+## Bundled model and historical first-milestone settings
 
-- Model: `../trellis/examples/four_wheel_robot.xml`
+- Model: `models/fruits_environment.xml`
 - Control topic: `/control` with two `f64` values: left and right wheel targets in `[0, 1]`
 - Left actuator: `rear_left_wheel`
 - Right actuator: `rear_right_wheel`

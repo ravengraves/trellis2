@@ -1,0 +1,136 @@
+// env_asset.pka — Static environment render assets bound to MuJoCo geoms.
+
+use path;
+use strings;
+
+export type EnvStaticAsset = struct {
+	mesh: E2GpuMesh,
+	albedo: E2GpuTexture,
+	normal: E2GpuTexture,
+	orm: E2GpuTexture,
+	model: Mat4,
+	material: Material,
+	geom_id: i32,
+	valid: bool,
+};
+
+export fn env_static_asset_empty() EnvStaticAsset = {
+	return EnvStaticAsset {
+		mesh = E2GpuMesh { vbo = 0u32, ibo = 0u32, wire_ibo = 0u32,
+			index_count = 0, wire_index_count = 0, valid = false },
+		albedo = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false },
+		normal = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false },
+		orm = E2GpuTexture { handle = 0u32, width = 0, height = 0, valid = false },
+		model = mat4_identity(),
+		material = material_pbr(color_white(), 1.0, 1.0),
+		geom_id = -1,
+		valid = false,
+	};
+};
+
+fn env_static_asset_join(asset_dir: str, leaf: str, buf: []u8) str = {
+	let p = path::FromStr(buf, asset_dir);
+	if (!path::Append(&p, leaf)) {
+		return "";
+	};
+	return path::ToStr(&p);
+};
+
+fn env_static_asset_pose(pos: []f32, rot: []f32) Mat4 = {
+	let m = mat4_identity();
+	m.d[0z] = rot[0z];
+	m.d[1z] = rot[3z];
+	m.d[2z] = rot[6z];
+	m.d[4z] = rot[1z];
+	m.d[5z] = rot[4z];
+	m.d[6z] = rot[7z];
+	m.d[8z] = rot[2z];
+	m.d[9z] = rot[5z];
+	m.d[10z] = rot[8z];
+	m.d[12z] = pos[0z];
+	m.d[13z] = pos[1z];
+	m.d[14z] = pos[2z];
+	m.d[15z] = 1.0;
+	return m;
+};
+
+export fn env_static_asset_update(asset: *EnvStaticAsset) void = {
+	if (!asset.valid || asset.geom_id < 0) {
+		return;
+	};
+
+	let pos: [3]f32 = [0.0...];
+	let rot: [9]f32 = [0.0...];
+	mj_shim_geom_pos(asset.geom_id, &pos[0z]);
+	mj_shim_geom_mat(asset.geom_id, &rot[0z]);
+	asset.model = env_static_asset_pose(pos[0z..3z], rot[0z..9z]);
+};
+
+// Load an asset directory with render.obj, albedo.png, optional normal.png,
+// and optional orm.png. The named MuJoCo geom supplies the render transform.
+export fn env_static_asset_load(asset_dir: str, geom_name: str) EnvStaticAsset = {
+	let out = env_static_asset_empty();
+	let geom_u8 = strings::toutf8(geom_name);
+	out.geom_id = mj_shim_geom_id(geom_u8.data);
+	if (out.geom_id < 0) {
+		return out;
+	};
+
+	let mesh_buf: [512]u8 = [0...];
+	let albedo_buf: [512]u8 = [0...];
+	let normal_buf: [512]u8 = [0...];
+	let orm_buf: [512]u8 = [0...];
+	let mesh_path = env_static_asset_join(asset_dir, "render.obj", mesh_buf[0z..512z]);
+	let albedo_path = env_static_asset_join(asset_dir, "albedo.png", albedo_buf[0z..512z]);
+	let normal_path = env_static_asset_join(asset_dir, "normal.png", normal_buf[0z..512z]);
+	let orm_path = env_static_asset_join(asset_dir, "orm.png", orm_buf[0z..512z]);
+
+	let mesh_u8 = strings::toutf8(mesh_path);
+	out.mesh = util_mesh_load_obj_upload(mesh_u8.data);
+	if (!out.mesh.valid) {
+		return out;
+	};
+
+	let mat = material_pbr(color_white(), 1.0, 1.0);
+	let albedo_u8 = strings::toutf8(albedo_path);
+	out.albedo = e2_gpu_texture_load_png_rgba(albedo_u8.data);
+	if (!out.albedo.valid) {
+		e2_gpu_mesh_destroy(&out.mesh);
+		return env_static_asset_empty();
+	};
+	mat.texture = out.albedo.handle;
+
+	let normal_u8 = strings::toutf8(normal_path);
+	out.normal = e2_gpu_texture_load_png_rgb(normal_u8.data);
+	if (out.normal.valid) {
+		mat.normal_texture = out.normal.handle;
+	};
+
+	let orm_u8 = strings::toutf8(orm_path);
+	out.orm = e2_gpu_texture_load_png_rgb(orm_u8.data);
+	if (out.orm.valid) {
+		mat.orm_texture = out.orm.handle;
+	};
+
+	out.material = mat;
+	out.valid = true;
+	env_static_asset_update(&out);
+	return out;
+};
+
+export fn env_static_asset_add_to_pass(asset: *EnvStaticAsset, buf: *E2GeomPassBuffer) void = {
+	if (!asset.valid || !asset.mesh.valid) {
+		return;
+	};
+	env_static_asset_update(asset);
+	util_geom_pass_add(buf, &asset.mesh, asset.model, asset.material);
+};
+
+export fn env_static_asset_destroy(asset: *EnvStaticAsset) void = {
+	if (asset.albedo.valid) { e2_gpu_texture_destroy(&asset.albedo); };
+	if (asset.normal.valid) { e2_gpu_texture_destroy(&asset.normal); };
+	if (asset.orm.valid) { e2_gpu_texture_destroy(&asset.orm); };
+	if (asset.mesh.valid) { e2_gpu_mesh_destroy(&asset.mesh); };
+	asset.valid = false;
+	asset.geom_id = -1;
+};

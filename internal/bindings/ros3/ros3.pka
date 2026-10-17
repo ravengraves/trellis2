@@ -1,0 +1,154 @@
+// Native Pika API plus explicit raw declarations for advanced C interop.
+// Native adapters emit pk_rose_* symbols; raw calls link to ROS3 itself.
+use strings;
+
+export type RoseNode = *opaque;
+export type RosePublisher = *opaque;
+export type RoseSubscriber = *opaque;
+export type RoseMsg = *opaque;
+
+export def ROSE_OK: i64 = 0;
+export def ROSE_NO_DATA: i64 = -1;
+export def ROSE_ERR_BADDATA: i64 = -2;
+export def ROSE_ERR_BUFFERSIZE: i64 = -4;
+export def ROSE_ERR_BADINPUT: i64 = -8;
+
+export def ROSE_LOG_INFO: i32 = 0;
+export def ROSE_LOG_WARN: i32 = 1;
+export def ROSE_LOG_ERROR: i32 = 2;
+export def ROSE_LOG_FATAL: i32 = 3;
+
+export @symbol("rose_last_error") fn rose_last_error() *u8;
+export @symbol("rose_last_error_code") fn rose_last_error_code() i64;
+
+@symbol("rose_init") fn ffi_rose_init(argc: i32, argv: **u8, name: *u8,
+	alloc: *opaque,
+	deallocator: *opaque) RoseNode;
+@symbol("rose_create_node") fn ffi_rose_create_node(name: *u8, name_length: i64,
+	prefix: *u8, prefix_len: i64,
+	remaps: *u8,
+	remap_string_lengths: *u64, remap_count: u64,
+	alloc: *opaque,
+	deallocator: *opaque) RoseNode;
+export @symbol("rose_shutdown") fn rose_shutdown(n: RoseNode) void;
+export @symbol("rose_ok") fn rose_ok(n: RoseNode) i64;
+
+export @symbol("rose_create_pub") fn c_rose_create_pub(n: RoseNode,
+	name: *u8, name_length: i64, message_length: u64, message_hz: u64) RosePublisher;
+@symbol("rose_create_sub") fn ffi_rose_create_sub(n: RoseNode,
+	name: *u8, name_length: i64, latest_only: u64,
+	callback: *opaque) RoseSubscriber;
+export @symbol("rose_delete_subscriber") fn rose_delete_subscriber(n: RoseNode,
+	s: RoseSubscriber) void;
+export @symbol("rose_publish") fn rose_publish(p: RosePublisher, msg: RoseMsg) i64;
+export @symbol("rose_read") fn rose_read(s: RoseSubscriber, msg: RoseMsg) i64;
+export @symbol("rose_readlast") fn rose_readlast(s: RoseSubscriber, msg: RoseMsg) i64;
+export @symbol("rose_remaining") fn rose_remaining(s: RoseSubscriber) u64;
+export @symbol("rose_spin_once") fn rose_spin_once(n: RoseNode) void;
+export @symbol("rose_spin_forever") fn rose_spin_forever(n: RoseNode) void;
+
+export @symbol("rose_get_param") fn c_rose_get_param(n: RoseNode,
+	param_name: *u8, param_name_length: i64, param: RoseMsg) i64;
+export @symbol("rose_set_param") fn c_rose_set_param(n: RoseNode,
+	param_name: *u8, param_name_length: i64, param: RoseMsg) i64;
+
+export @symbol("rose_log") fn c_rose_log(node: RoseNode, level: i32,
+	message: *u8, message_length: i64) void;
+export @symbol("rose_info") fn c_rose_info(message: *u8, message_length: i64) void;
+export @symbol("rose_warn") fn c_rose_warn(message: *u8, message_length: i64) void;
+export @symbol("rose_error") fn c_rose_error(message: *u8, message_length: i64) void;
+export @symbol("rose_fatal") fn c_rose_fatal(message: *u8, message_length: i64) void;
+
+export @symbol("rose_topic_to_shm") fn rose_topic_to_shm(
+	shm: *u8, shm_size: size, topic: *u8) *u8;
+export @symbol("rose_set_pdeathsig") fn rose_set_pdeathsig(sig: i32) i32;
+
+
+// Native constructors use standard allocation; subscriptions use explicit polling.
+export @symbol("pk_rose_create_node") fn rose_create_node(name: str, prefix: str) RoseNode = {
+	let name_bytes = strings::toutf8(name);
+	let prefix_bytes = strings::toutf8(prefix);
+	return c_rose_create_node(name_bytes.data, name_bytes.len: i64,
+		prefix_bytes.data, prefix_bytes.len: i64, 0: uintptr: *u8,
+		0: uintptr: *u64, 0u64);
+};
+
+export @symbol("pk_rose_create_pub") fn rose_create_pub(n: RoseNode, name: str,
+	message_length: u64, message_hz: u64) RosePublisher = {
+	let name_bytes = strings::toutf8(name);
+	return c_rose_create_pub(n, name_bytes.data, name_bytes.len: i64,
+		message_length, message_hz);
+};
+
+export @symbol("pk_rose_create_sub") fn rose_create_sub(n: RoseNode, name: str,
+	latest_only: bool) RoseSubscriber = {
+	let name_bytes = strings::toutf8(name);
+	let latest: u64 = 0u64;
+	if (latest_only) { latest = 1u64; };
+	return c_rose_create_sub(n, name_bytes.data, name_bytes.len: i64,
+		latest);
+};
+
+export @symbol("pk_rose_get_param") fn rose_get_param(n: RoseNode, param_name: str, param: RoseMsg) i64 = {
+	let name_bytes = strings::toutf8(param_name);
+	return c_rose_get_param(n, name_bytes.data, name_bytes.len: i64, param);
+};
+
+export @symbol("pk_rose_set_param") fn rose_set_param(n: RoseNode, param_name: str, param: RoseMsg) i64 = {
+	let name_bytes = strings::toutf8(param_name);
+	return c_rose_set_param(n, name_bytes.data, name_bytes.len: i64, param);
+};
+
+export @symbol("pk_rose_log") fn rose_log(node: RoseNode, level: i32, message: str) void = {
+	let bytes = strings::toutf8(message);
+	c_rose_log(node, level, bytes.data, bytes.len: i64);
+};
+
+export @symbol("pk_rose_info") fn rose_info(message: str) void = {
+	let bytes = strings::toutf8(message);
+	c_rose_info(bytes.data, bytes.len: i64);
+};
+
+export @symbol("pk_rose_warn") fn rose_warn(message: str) void = {
+	let bytes = strings::toutf8(message);
+	c_rose_warn(bytes.data, bytes.len: i64);
+};
+
+export @symbol("pk_rose_error") fn rose_error(message: str) void = {
+	let bytes = strings::toutf8(message);
+	c_rose_error(bytes.data, bytes.len: i64);
+};
+
+export @symbol("pk_rose_fatal") fn rose_fatal(message: str) void = {
+	let bytes = strings::toutf8(message);
+	c_rose_fatal(bytes.data, bytes.len: i64);
+};
+
+// Time: direct ROS3 clock and sleep bindings.
+
+export @symbol("rose_now") fn rose_now() u64;
+export @symbol("rose_timer_calibrate_seconds") fn rose_timer_calibrate_seconds(seconds: f64) void;
+export @symbol("rose_seconds") fn rose_seconds(stop: u64, start: u64) f64;
+export @symbol("rose_nanoseconds") fn rose_nanoseconds(stop: u64, start: u64) f64;
+export @symbol("rose_elapsed_seconds") fn rose_elapsed_seconds(start: u64) f64;
+export @symbol("rose_elapsed_nanoseconds") fn rose_elapsed_nanoseconds(start: u64) f64;
+export @symbol("rose_sleep") fn rose_sleep(seconds: f64) void;
+export @symbol("rose_nanosleep") fn rose_nanosleep(nanoseconds: f64) void;
+export @symbol("rose_sleep_rate") fn rose_sleep_rate(hz: f64) void;
+
+// Internal ABI declarations above retain the C argument slots. Public entry
+// points always pass null hooks: system allocation and polling only.
+export @symbol("pk_c_rose_init") fn c_rose_init(argc: i32, argv: **u8, name: *u8) RoseNode = {
+	return ffi_rose_init(argc, argv, name, 0: uintptr: *opaque, 0: uintptr: *opaque);
+};
+export @symbol("pk_c_rose_create_node") fn c_rose_create_node(name: *u8, name_length: i64,
+	prefix: *u8, prefix_len: i64, remaps: *u8,
+	remap_string_lengths: *u64, remap_count: u64) RoseNode = {
+	return ffi_rose_create_node(name, name_length, prefix, prefix_len,
+		remaps, remap_string_lengths, remap_count,
+		0: uintptr: *opaque, 0: uintptr: *opaque);
+};
+export @symbol("pk_c_rose_create_sub") fn c_rose_create_sub(n: RoseNode,
+	name: *u8, name_length: i64, latest_only: u64) RoseSubscriber = {
+	return ffi_rose_create_sub(n, name, name_length, latest_only, 0: uintptr: *opaque);
+};

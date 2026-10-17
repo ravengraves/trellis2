@@ -1,0 +1,203 @@
+// Complete bindings for mirage/include/mirage.h (standard, not embedded ABI).
+// Native adapters emit pk_mirage_*; c_mirage_* declarations call the C library.
+use strings;
+
+// Borrowed handle. Cast to *MirageBuffer only while the message is alive.
+export type MirageMsg = *opaque;
+export type MirageBuffer = struct {
+	max_length: i64,
+	length: i64,
+	cursor: i64,
+	data: *u8,
+};
+export type MirageElementType = i32;
+export type MirageArrayType = i32;
+export type MirageError = i32;
+
+// Enum ordinals, NOT the WXF wire tag bytes.
+export def MIRAGE_FUNCTION: i32 = 0;
+export def MIRAGE_I8: i32 = 1;
+export def MIRAGE_I16: i32 = 2;
+export def MIRAGE_I32: i32 = 3;
+export def MIRAGE_I64: i32 = 4;
+export def MIRAGE_F64: i32 = 5;
+export def MIRAGE_STRING: i32 = 6;
+export def MIRAGE_BINSTRING: i32 = 7;
+export def MIRAGE_SYMBOL: i32 = 8;
+export def MIRAGE_BIGINT: i32 = 9;
+export def MIRAGE_BIGREAL: i32 = 10;
+export def _MIRAGE_PACKEDARRAY: i32 = 11;
+export def MIRAGE_NUMERICARRAY: i32 = 12;
+export def MIRAGE_ASSOCIATION: i32 = 13;
+export def _MIRAGE_RULE_DELAYED: i32 = 14;
+export def MIRAGE_RULE: i32 = 15;
+
+export def MIRAGE_ARRAY_I8: i32 = 0;
+export def MIRAGE_ARRAY_I16: i32 = 1;
+export def MIRAGE_ARRAY_I32: i32 = 2;
+export def MIRAGE_ARRAY_I64: i32 = 3;
+export def MIRAGE_ARRAY_U8: i32 = 4;
+export def MIRAGE_ARRAY_U16: i32 = 5;
+export def MIRAGE_ARRAY_U32: i32 = 6;
+export def MIRAGE_ARRAY_U64: i32 = 7;
+export def MIRAGE_ARRAY_F32: i32 = 8;
+export def MIRAGE_ARRAY_F64: i32 = 9;
+export def MIRAGE_ARRAY_C32: i32 = 10;
+export def MIRAGE_ARRAY_C64: i32 = 11;
+
+export def MIRAGE_ERR_BADDATA: i64 = -1;
+export def MIRAGE_ERR_BUFFERSIZE: i64 = -2;
+export def MIRAGE_ERR_BADINPUT: i64 = -4;
+export def MIRAGE_STRLEN: i64 = -1;
+export def MIRAGE_SKIP_COPY: i64 = -1;
+export def MIRAGE_SKIP_DATA: i64 = -1;
+export def MIRAGE_MAX_TENSOR_BYTES: i64 = 265420800;
+
+// Immutable mirrors of the public C encoding tables. Values from mirage.c.
+export def MIRAGE_ELEMENT_TYPE_ENCODING: [16]u8 = [102u8, 67u8, 106u8, 105u8,
+	76u8, 114u8, 83u8, 66u8, 115u8, 73u8, 82u8, 193u8, 194u8, 65u8, 58u8, 45u8];
+export def MIRAGE_ARRAY_TYPE_ENCODING: [12]u8 = [0u8, 1u8, 2u8, 3u8,
+	16u8, 17u8, 18u8, 19u8, 34u8, 35u8, 51u8, 52u8];
+export def MIRAGE_ARRAY_TYPE_SIZE: [12]u8 = [1u8, 2u8, 4u8, 8u8,
+	1u8, 2u8, 4u8, 8u8, 4u8, 8u8, 8u8, 16u8];
+
+// Storage passed to init is borrowed. Never destroy a caller-owned buffer.
+export @symbol("mirage_init") fn c_mirage_init(msg: MirageMsg, buffer: *u8, buffer_size: i64) void;
+@symbol("mirage_create") fn ffi_mirage_create(buffer_size: i64, alloc: *opaque) MirageMsg;
+@symbol("mirage_destroy") fn ffi_mirage_destroy(msg: *MirageMsg, dealloc: *opaque) void;
+
+export @symbol("pk_mirage_init") fn mirage_init(msg: *MirageBuffer, buffer: []u8) void = {
+	c_mirage_init(msg: MirageMsg, buffer.data, buffer.len: i64);
+};
+export @symbol("pk_mirage_create") fn mirage_create(buffer_size: i64) MirageMsg = {
+	return ffi_mirage_create(buffer_size, 0: uintptr: *opaque);
+};
+export @symbol("pk_mirage_destroy") fn mirage_destroy(msg: *MirageMsg) void = {
+	ffi_mirage_destroy(msg, 0: uintptr: *opaque);
+};
+
+export @symbol("mirage_write_start") fn mirage_write_start(msg: MirageMsg) i64;
+export @symbol("mirage_reset") fn mirage_reset(msg: MirageMsg) i64;
+export @symbol("mirage_remaining") fn mirage_remaining(msg: MirageMsg) i64;
+export @symbol("mirage_read_start") fn mirage_read_start(msg: MirageMsg) i64;
+export @symbol("mirage_write_assoc_rule") fn mirage_write_assoc_rule(msg: MirageMsg) i64;
+export @symbol("mirage_read_assoc_rule") fn mirage_read_assoc_rule(msg: MirageMsg) i64;
+
+// Scalar outputs and the cursor remain unchanged on read errors.
+export @symbol("mirage_write_i8") fn mirage_write_i8(msg: MirageMsg, value: i8) i64;
+export @symbol("mirage_read_i8") fn mirage_read_i8(msg: MirageMsg, value: *i8) i64;
+export @symbol("mirage_write_i16") fn mirage_write_i16(msg: MirageMsg, value: i16) i64;
+export @symbol("mirage_read_i16") fn mirage_read_i16(msg: MirageMsg, value: *i16) i64;
+export @symbol("mirage_write_i32") fn mirage_write_i32(msg: MirageMsg, value: i32) i64;
+export @symbol("mirage_read_i32") fn mirage_read_i32(msg: MirageMsg, value: *i32) i64;
+export @symbol("mirage_write_i64") fn mirage_write_i64(msg: MirageMsg, value: i64) i64;
+export @symbol("mirage_read_i64") fn mirage_read_i64(msg: MirageMsg, value: *i64) i64;
+export @symbol("mirage_write_f64") fn mirage_write_f64(msg: MirageMsg, value: f64) i64;
+export @symbol("mirage_read_f64") fn mirage_read_f64(msg: MirageMsg, value: *f64) i64;
+
+// Text writes pass exact UTF-8 byte lengths; no NUL terminator is needed.
+export @symbol("mirage_write_fn") fn c_mirage_write_fn(msg: MirageMsg,
+	value: *u8, length: i64, argc: i64) i64;
+export @symbol("pk_mirage_write_fn") fn mirage_write_fn(msg: MirageMsg,
+	value: str, argc: i64) i64 = {
+	let bytes = strings::toutf8(value);
+	return c_mirage_write_fn(msg, bytes.data, bytes.len: i64, argc);
+};
+
+export @symbol("mirage_write_string") fn c_mirage_write_string(msg: MirageMsg,
+	value: *u8, length: i64) i64;
+export @symbol("pk_mirage_write_string") fn mirage_write_string(msg: MirageMsg,
+	value: str) i64 = {
+	let bytes = strings::toutf8(value);
+	return c_mirage_write_string(msg, bytes.data, bytes.len: i64);
+};
+
+export @symbol("mirage_write_sym") fn c_mirage_write_sym(msg: MirageMsg,
+	value: *u8, length: i64) i64;
+export @symbol("pk_mirage_write_sym") fn mirage_write_sym(msg: MirageMsg,
+	value: str) i64 = {
+	let bytes = strings::toutf8(value);
+	return c_mirage_write_sym(msg, bytes.data, bytes.len: i64);
+};
+
+export @symbol("mirage_write_bigint") fn c_mirage_write_bigint(msg: MirageMsg,
+	value: *u8, length: i64) i64;
+export @symbol("pk_mirage_write_bigint") fn mirage_write_bigint(msg: MirageMsg,
+	value: str) i64 = {
+	let bytes = strings::toutf8(value);
+	return c_mirage_write_bigint(msg, bytes.data, bytes.len: i64);
+};
+
+export @symbol("mirage_write_bigreal") fn c_mirage_write_bigreal(msg: MirageMsg,
+	value: *u8, length: i64) i64;
+export @symbol("pk_mirage_write_bigreal") fn mirage_write_bigreal(msg: MirageMsg,
+	value: str) i64 = {
+	let bytes = strings::toutf8(value);
+	return c_mirage_write_bigreal(msg, bytes.data, bytes.len: i64);
+};
+
+export @symbol("mirage_write_bin") fn c_mirage_write_bin(msg: MirageMsg,
+	value: *u8, length: i64) i64;
+export @symbol("pk_mirage_write_bin") fn mirage_write_bin(msg: MirageMsg,
+	value: []u8) i64 = {
+	let bytes = value;
+	return c_mirage_write_bin(msg, bytes.data, bytes.len: i64);
+};
+
+// Reads fill caller-owned slices and report the actual byte count via length.
+// Text is NOT NUL-terminated. Decode only buffer[..length] after success.
+// For MIRAGE_SKIP_COPY use the explicit c_mirage_* declaration.
+export @symbol("mirage_read_fn") fn c_mirage_read_fn(msg: MirageMsg,
+	value: *u8, length: *i64, capacity: i64, argc: *i64) i64;
+export @symbol("pk_mirage_read_fn") fn mirage_read_fn(msg: MirageMsg,
+	value: []u8, length: *i64, argc: *i64) i64 = {
+	return c_mirage_read_fn(msg, value.data, length, value.len: i64, argc);
+};
+
+export @symbol("mirage_read_string") fn c_mirage_read_string(msg: MirageMsg,
+	value: *u8, length: *i64, capacity: i64) i64;
+export @symbol("pk_mirage_read_string") fn mirage_read_string(msg: MirageMsg,
+	value: []u8, length: *i64) i64 = {
+	return c_mirage_read_string(msg, value.data, length, value.len: i64);
+};
+
+export @symbol("mirage_read_sym") fn c_mirage_read_sym(msg: MirageMsg,
+	value: *u8, length: *i64, capacity: i64) i64;
+export @symbol("pk_mirage_read_sym") fn mirage_read_sym(msg: MirageMsg,
+	value: []u8, length: *i64) i64 = {
+	return c_mirage_read_sym(msg, value.data, length, value.len: i64);
+};
+
+export @symbol("mirage_read_bigint") fn c_mirage_read_bigint(msg: MirageMsg,
+	value: *u8, length: *i64, capacity: i64) i64;
+export @symbol("pk_mirage_read_bigint") fn mirage_read_bigint(msg: MirageMsg,
+	value: []u8, length: *i64) i64 = {
+	return c_mirage_read_bigint(msg, value.data, length, value.len: i64);
+};
+
+export @symbol("mirage_read_bigreal") fn c_mirage_read_bigreal(msg: MirageMsg,
+	value: *u8, length: *i64, capacity: i64) i64;
+export @symbol("pk_mirage_read_bigreal") fn mirage_read_bigreal(msg: MirageMsg,
+	value: []u8, length: *i64) i64 = {
+	return c_mirage_read_bigreal(msg, value.data, length, value.len: i64);
+};
+
+export @symbol("mirage_read_bin") fn c_mirage_read_bin(msg: MirageMsg,
+	value: *u8, length: *i64, capacity: i64) i64;
+export @symbol("pk_mirage_read_bin") fn mirage_read_bin(msg: MirageMsg,
+	value: []u8, length: *i64) i64 = {
+	return c_mirage_read_bin(msg, value.data, length, value.len: i64);
+};
+
+// Numeric payloads are untyped: caller supplies correctly sized/aligned storage.
+// Read max_rank and max_bytes independently accept -1 to skip copying.
+// Even skipped payloads are validated and consumed. Type and rank are required.
+export @symbol("mirage_write_numericarray") fn mirage_write_numericarray(
+	msg: MirageMsg, array_type: MirageArrayType, rank: i64, dims: *i64, data: *opaque) i64;
+export @symbol("mirage_read_numericarray") fn mirage_read_numericarray(
+	msg: MirageMsg, array_type: *MirageArrayType, rank: *i64, dims: *i64,
+	max_rank: i64, data: *opaque, max_bytes: i64) i64;
+export @symbol("mirage_write_association") fn mirage_write_association(msg: MirageMsg, length: i64) i64;
+export @symbol("mirage_read_association") fn mirage_read_association(msg: MirageMsg, length: *i64) i64;
+// Peek normalizes packed arrays to NUMERICARRAY and delayed rules to RULE.
+export @symbol("mirage_peek_element_type") fn mirage_peek_element_type(msg: MirageMsg, element: *MirageElementType) i64;
