@@ -1,4 +1,4 @@
-# URC Simulator
+# Trellis2 Simulator
 
 [![Build](https://github.com/ravengraves/trellis2/actions/workflows/build.yml/badge.svg)](https://github.com/ravengraves/trellis2/actions/workflows/build.yml)
 
@@ -85,8 +85,6 @@ shared memory. Installing headers alone is not enough to run graphics tests.
 
 ### Pika compiler and runtime sources
 
-Use Pika's `install.sh` to install or upgrade `pika2c` and `pikacc`:
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ravengraves/pika/master/install.sh \
   -o /tmp/pika-install.sh
@@ -94,20 +92,8 @@ sh /tmp/pika-install.sh
 command -v pika2c
 ```
 
-The installer copies `lib/` and `runtime/` to `/usr/local/share/pika/` and
-installs `pikacc` and `pika2c` on PATH. Trellis2 uses the installed driver from
-its own working directory; no Pika source-checkout path is needed. The standard
-library is discovered by the driver, not through PATH.
-
-Use a current driver supporting `-R` and `-- <C compiler arguments...>`.
-The build.ninja passes compiler and linker arguments after `--`. It uses `-R`
-by default; override `PIKAFLAGS` for other settings. Select a different driver
-with `PIKACC=/path/to/pikacc ninja`. Release builds use native CPU tuning, so
-rebuild on the destination machine rather than assuming binary portability.
 
 ### Rose libraries
-
-Use ROS3's `install.sh` to install or upgrade Mirage, Quicksand, and ROS3:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ravengraves/ros3/master/install.sh \
@@ -115,14 +101,6 @@ curl -fsSL https://raw.githubusercontent.com/ravengraves/ros3/master/install.sh 
 sh /tmp/ros3-install.sh
 ```
 
-The script downloads and builds the libraries, installs their system files
-using sudo, and installs their Python bindings using pip.
-
-Both installers update existing source checkouts and may require GitHub access
-credentials. They do not pin dependency revisions. Trellis2 uses the installed
-Rose headers and libraries under `/usr/local` by default, and finds `rosecore`
-on PATH. Source checkouts are not needed by the Trellis2 build. After a custom
-system library installation, refresh the loader cache with `sudo ldconfig`.
 
 ### Customized MuJoCo
 
@@ -132,13 +110,6 @@ The customized MuJoCo source, its dependencies, licenses, and original
 ```sh
 ninja mujoco
 ```
-
-This must provide `include/mujoco/` and static libraries in `build/lib/`:
-`libmujoco.a`, `libtinyxml2.a`, `liblodepng.a`, `libqhullstatic_r.a`,
-`libqhullcpp.a`, `libccd.a`, and `libtinyobjloader.a`. Build these for the same
-architecture/toolchain as Trellis2. An unrelated system MuJoCo package is not
-a replacement. See the bundled [vendoring notes](vendor/mujoco/TRELLIS2.md)
-for provenance.
 
 ## Build and Test
 
@@ -152,31 +123,9 @@ application or test targets.
 ninja                     # Main executable: build/urc_simulator
 ninja all                 # All applications
 ninja image_view          # One application
-ninja tests               # Compile all test/demo executables
 ninja check               # Build tests and run automated checks
 ./build/test_robot_motion # Run it
 ```
-
-Pika targets share one compiler rule with per-target sources and C arguments.
-Other commands use a shared shell rule. The root file loads `test/build.ninja`,
-which defines test build groups using the same tools and source lists.
-Test execution is also defined in `test/build.ninja`. Run `ninja tests` to
-compile test binaries, or `ninja check` to build them and run automated checks.
-Run these commands from the repository root; `test/build.ninja` is loaded
-automatically and is not a standalone build file.
-Executables are written to `build/`.
-Ninja tracks the generated shader header, bridge objects, and executable files.
-Shared source groups record timestamps so source edits reliably rebuild their
-consumers even when the MuJoCo archive check is unchanged. Source changes
-rebuild the affected application or test group; bridge header
-dependencies are collected by the C compiler. The robot bridge is built
-separately for its consumers. MuJoCo's nested build is checked each time,
-and only changed archive contents invalidate dependent executables.
-`ninja check` always runs the checks, reusing unchanged binaries.
-Source lists are ordinary Ninja variables; tools and flags accept environment
-overrides. Recipes run sequentially. After changing environment overrides or
-upgrading installed compiler/runtime libraries, use `ninja -t clean` before
-rebuilding; Ninja does not track environment values or installed package versions.
 
 Dependencies and tools can be selected through environment variables:
 
@@ -208,15 +157,6 @@ the repository root.
 | `image_view` | ROS3 image-topic viewer with optional bounding-box overlays. |
 | `vjoy` | Virtual joystick that publishes linear and angular velocity commands, typically on `/cmd_vel`. |
 
-### Continuous integration
-
-The [GitHub Actions build workflow](.github/workflows/build.yml) installs Pika
-and ROS3 using their public `install.sh` scripts, builds the four applications
-listed above in separate steps, then runs `ninja check` on Ubuntu 24.04.
-The build targets automatically build their setup dependencies.
-The badge reports both compilation and automated check results. Dependency repositories
-must be publicly readable; installers follow their current upstream revisions.
-The badge targets `ravengraves/trellis2`.
 
 ## Run the Simulator and Joystick
 
@@ -232,21 +172,9 @@ the simulator can step at 1000 Hz while rendering less frequently.
 Use `--radiation` to add sparse bright channel hits to the mounted camera RGB
 feed and the main 3D view, and `--dust` to fade the mounted camera image and
 main 3D view toward dust by 20m. The sensor effects affect both the preview
-texture and the `/simulator/rgb` published image.
+texture and the `/simulator/rgb` published image. You can also use `--terminal`
+to do rendering to the terminal (through Pollyn Engine).
 
-Build and run the virtual joystick velocity target publisher from `trellis2/`
-(its source is `cmd/vjoy/vjoy_main.pka`):
-
-```sh
-ninja vjoy
-./build/vjoy --topic /cmd_vel
-```
-
-The vjoy window contains a 128x128 pixel joystick. Drag upward/downward for
-linear velocity and left/right for z-up yaw angular velocity. Dragging left
-publishes positive angular velocity. It publishes `F64[2]` as
-`[linear_mps, angular_rps]`, using +/-1.0 m/s and +/-1.5 rad/s limits, and
-publishes zeros when released.
 
 ## ROS3 Motion Topics
 
